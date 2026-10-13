@@ -295,7 +295,7 @@ async function renderPurchases() {
   sec.id = 'purchases';
   const t = document.createElement('div'); t.className = 'page-title'; t.textContent = 'Purchases';
   const s = document.createElement('div'); s.className = 'page-sub';
-  s.textContent = 'Materials, price, unit of measure → ₱ per base unit';
+  s.textContent = 'Item · unit of measure · measure/pack · packs · cost/pack → total UOM, total price, ₱ per base unit';
   sec.append(t, s);
 
   let rows = [];
@@ -314,7 +314,7 @@ async function renderPurchases() {
   const table = document.createElement('table');
   const thead = document.createElement('thead');
   const hrow = document.createElement('tr');
-  ['id', 'Name', 'Brand', 'Pack size', 'Unit', 'Qty packs', 'Cost', '₱ / base', 'On hand', 'Low?'].forEach(h => {
+  ['id', 'Item / Ingredient', 'Unit', 'Measure / pack', 'Packs', 'Total UOM', '₱ / pack', 'Total price', '₱ / base', 'On hand', 'Low?'].forEach(h => {
     const th = document.createElement('th'); th.textContent = h; hrow.appendChild(th);
   });
   thead.appendChild(hrow);
@@ -322,16 +322,20 @@ async function renderPurchases() {
   for (const r of rows) {
     const oh = onHand(r, sold[String(r.id)] || 0);
     const low = oh < Number(r.low_at);
+    const packs = Number(r.qty_packs);
+    const perPack = packs > 0 ? Number(r.cost_price) / packs : Number(r.cost_price);
+    const totalUom = packs * Number(r.pack_size);
     const tr = document.createElement('tr');
     const cells = [
-      String(r.id).slice(0, 8), r.name, r.brand || '—', `${Number(r.pack_size)} ${r.base_unit}`, r.base_unit,
-      Number(r.qty_packs), peso(r.cost_price), rate(pricePerBase(r)),
+      String(r.id).slice(0, 8), r.name, r.base_unit, `${Number(r.pack_size)} ${r.base_unit}`, packs,
+      `${totalUom} ${r.base_unit}`, peso(perPack), peso(r.cost_price), rate(pricePerBase(r)),
       `${oh} ${r.base_unit}`, low ? 'LOW' : '',
     ];
     cells.forEach((val, i) => {
       const td = document.createElement('td');
       if (i === 6 || i === 7) td.className = 'peso';
-      if (i === 9 && low) { td.className = 'neg'; td.textContent = 'LOW'; }
+      if (i === 8) td.className = 'peso';
+      if (i === 10 && low) { td.className = 'neg'; td.textContent = 'LOW'; }
       else td.textContent = String(val);
       tr.appendChild(td);
     });
@@ -344,9 +348,9 @@ async function renderPurchases() {
   const form = document.createElement('div');
   form.className = 'card';
   const fields = [
-    ['name', 'Name'], ['brand', 'Brand'], ['pack_size', 'Pack size'],
-    ['base_unit', 'Base unit'], ['qty_packs', 'Qty packs'], ['cost_price', 'Cost (₱)'],
-    ['supplier', 'Supplier'], ['low_at', 'Low threshold'],
+    ['name', 'Item / Ingredient'], ['base_unit', 'Unit of measure (base unit)'],
+    ['pack_size', 'Measure per pack'], ['cost_per_pack', 'Cost per pack (₱)'],
+    ['qty_packs', 'Number of packs'], ['low_at', 'Low threshold'],
   ];
   const inputs = {};
   fields.forEach(([k, label]) => {
@@ -354,7 +358,7 @@ async function renderPurchases() {
     inp.className = 'field'; inp.dataset.key = k;
     inp.setAttribute('placeholder', label);
     inp.setAttribute('aria-label', label);
-    if (k === 'pack_size' || k === 'qty_packs' || k === 'cost_price' || k === 'low_at') inp.type = 'number';
+    if (k === 'pack_size' || k === 'qty_packs' || k === 'cost_per_pack' || k === 'low_at') inp.type = 'number';
     else inp.type = 'text';
     inputs[k] = inp;
     form.appendChild(inp);
@@ -369,12 +373,16 @@ async function renderPurchases() {
     for (const [k] of fields) {
       const v = inputs[k].value.trim();
       if (v === '') continue;
-      obj[k] = (k === 'pack_size' || k === 'qty_packs' || k === 'cost_price' || k === 'low_at') ? Number(v) : v;
+      obj[k] = (k === 'pack_size' || k === 'qty_packs' || k === 'cost_per_pack' || k === 'low_at') ? Number(v) : v;
     }
-    if (!obj.name || obj.pack_size == null || obj.cost_price == null || !obj.base_unit) {
-      const w = document.createElement('div'); w.className = 'neg'; w.textContent = 'Name, pack size, base unit and cost are required.';
+    if (!obj.name || obj.pack_size == null || obj.cost_per_pack == null || !obj.base_unit) {
+      const w = document.createElement('div'); w.className = 'neg'; w.textContent = 'Item, pack size, base unit and cost per pack are required.';
       form.appendChild(w); return;
     }
+    // store the TOTAL price (packs x cost/pack) so existing math + seed stay intact
+    const packs = obj.qty_packs == null ? 1 : obj.qty_packs;
+    obj.cost_price = Math.round(obj.cost_per_pack * packs * 100) / 100;
+    delete obj.cost_per_pack;
     postData('purchases', obj).then(() => location.reload());
   });
 
@@ -659,7 +667,7 @@ async function renderRecipes() {
         const ul = document.createElement('div');
         ul.textContent = ing.map(ln => {
           const p = byId[String(ln.purchase_id)];
-          const label = p ? `${p.name}${p.brand ? ' ' + p.brand : ''}` : '?';
+          const label = p ? p.name : '?';
           const unit = p ? p.base_unit : '';
           return `${ln.qty_base} ${unit} ${label}`;
         }).join(' · ');
@@ -1190,7 +1198,7 @@ async function renderOrdering() {
       if (!p) continue;
       const oh = onHand(p, soldNow[pid] || 0);
       if (need[pid] > oh) {
-        shortages.push(`${p.name}${p.brand ? ' ' + p.brand : ''}: need ${need[pid]} ${p.base_unit}, only ${oh} ${p.base_unit} on hand`);
+        shortages.push(`${p.name}: need ${need[pid]} ${p.base_unit}, only ${oh} ${p.base_unit} on hand`);
       }
     }
     if (shortages.length) {

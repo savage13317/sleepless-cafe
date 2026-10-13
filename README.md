@@ -8,7 +8,7 @@ Facebook page.
 
 Six pages, each a focused tool (see `PLAN.md` for the full spec):
 
-1. **Purchases / materials** — qty, price, unit of measure → derived **₱ per base unit** and **on hand**.
+1. **Purchases / materials** — item/ingredient · unit of measure · measure per pack · packs · cost per pack → derived **total UOM**, **total price**, and **₱ per base unit** + **on hand**.
 2. **Recipes** — drink · size · ingredients → one-cup cost (free to create, never changes stock).
 3. **Overhead** — indirect costs → **₱ per cup**.
 4. **Selling price** — menu + margin per drink/size (staff reference; costs are hidden from customers).
