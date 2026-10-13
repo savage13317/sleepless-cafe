@@ -1,0 +1,15 @@
+# Sleepless Café — repo ignore rules
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+*.tmp
+*~
+
+# Local scratch / test artifacts
+_tmp_*
+*.log
+
+# Never commit a real secret key even if one is ever dropped in here
+*secret*key*
