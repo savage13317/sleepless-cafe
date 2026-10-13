@@ -64,9 +64,12 @@ This is a **privacy model, not true authentication**:
 
 ## Deploying (GitHub Pages)
 
-1. Create a **private** GitHub repo and push this folder's contents to the `main` branch.
-2. Enable **GitHub Pages** from that branch. A private repo's Pages site is served at an
-   **unlisted URL** reachable only to those who have it — matching the privacy model above.
+1. Create a GitHub repo and push this folder's contents to the `main` branch. On the free
+   plan, GitHub Pages only serves from a **public** repo, so the repo is public — but the
+   Pages URL is still effectively unlisted (see below).
+2. Enable **GitHub Pages** from that branch. The site is served at
+   `https://<user>.github.io/<repo>/`. Keep that URL unlisted: it is the only thing that
+   makes the site private, so never link it from the FB page and rely on the gate + `noindex`.
 3. Keep the URL unlisted: never link it from the FB page, and rely on the gate + `noindex`.
 
 > Note: pushing requires credentials typed by the user — the assistant never handles passwords.

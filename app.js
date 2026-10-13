@@ -189,6 +189,41 @@ function addPrintButton(sec, label = 'Print this page') {
   return btn;
 }
 
+// A small "delete by id" card appended to a page: paste an entry's id (the
+// short id shown on its row/card is enough — it matches by prefix) and the
+// matching row is removed from the table. Reloads so the page reflects it.
+function addDeleteCard(sec, rows, table, idPlaceholder) {
+  const card = document.createElement('div');
+  card.className = 'card';
+  const head = document.createElement('div');
+  head.textContent = 'Delete an entry';
+  const idInp = document.createElement('input');
+  idInp.className = 'field';
+  idInp.setAttribute('placeholder', idPlaceholder);
+  idInp.setAttribute('aria-label', idPlaceholder);
+  const delBtn = document.createElement('button');
+  delBtn.className = 'btn-delete';
+  delBtn.textContent = 'Delete';
+  card.append(head, idInp, delBtn);
+  sec.appendChild(card);
+
+  delBtn.addEventListener('click', () => {
+    const idKey = idInp.value.trim();
+    if (!idKey) {
+      const w = document.createElement('div'); w.className = 'neg';
+      w.textContent = 'Paste the id of the entry to delete.';
+      card.appendChild(w); return;
+    }
+    const row = rows.find(r => String(r.id) === idKey || String(r.id).startsWith(idKey));
+    if (!row) {
+      const w = document.createElement('div'); w.className = 'neg';
+      w.textContent = 'No such entry — copy the id from one of the rows above.';
+      card.appendChild(w); return;
+    }
+    deleteData(table, `id=eq.${encodeURIComponent(row.id)}`).then(() => location.reload());
+  });
+}
+
 // stock value ₱ = Σ(on_hand × price_per_base) across purchases (draw-down
 // adjusted). low-stock count = purchases where on_hand < low_at. quotes this
 // month = number of orders whose date falls in the current month.
@@ -373,6 +408,7 @@ async function renderPurchases() {
       .then(() => location.reload());
   });
 
+  addDeleteCard(sec, rows, 'purchases', 'Purchase id (copy from a row)');
   return sec;
 }
 
@@ -534,7 +570,7 @@ async function renderStocktake() {
     hist.appendChild(ht);
     const htable = document.createElement('table');
     const hh = document.createElement('tr');
-    ['Date', 'Counter', 'Items', 'Lost', 'Savings', 'Net'].forEach(x => {
+    ['id', 'Date', 'Counter', 'Items', 'Lost', 'Savings', 'Net'].forEach(x => {
       const th = document.createElement('th'); th.textContent = x; hh.appendChild(th);
     });
     const hhead = document.createElement('thead'); hhead.appendChild(hh);
@@ -543,11 +579,11 @@ async function renderStocktake() {
       const tt = st.totals || {};
       const tr = document.createElement('tr');
       const nLines = Array.isArray(st.lines) ? st.lines.length : 0;
-      const cells = [st.date || '', st.counter || '—', String(nLines),
+      const cells = [String(st.id).slice(0, 8), st.date || '', st.counter || '—', String(nLines),
         peso(tt.lost || 0), peso(tt.savings || 0), peso(tt.net || 0)];
       cells.forEach((val, i) => {
         const td = document.createElement('td');
-        if (i >= 3) td.className = 'peso';
+        if (i >= 4) td.className = 'peso';
         td.textContent = String(val);
         tr.appendChild(td);
       });
@@ -562,6 +598,7 @@ async function renderStocktake() {
     sec.appendChild(note);
   }
 
+  addDeleteCard(sec, history, 'stocktakes', 'Stock-take id (copy from history)');
   addPrintButton(sec, 'Print stock-take sheet');
   return sec;
 }
@@ -613,6 +650,10 @@ async function renderRecipes() {
       const head = document.createElement('div');
       head.textContent = `${rc.drink_name} · ${rc.size}`;
       card.appendChild(head);
+      const idTag = document.createElement('div');
+      idTag.className = 'num';
+      idTag.textContent = 'id ' + String(rc.id).slice(0, 8);
+      card.appendChild(idTag);
       const ing = Array.isArray(rc.ingredients) ? rc.ingredients : [];
       if (ing.length) {
         const ul = document.createElement('div');
@@ -700,6 +741,7 @@ async function renderRecipes() {
     postData('recipes', { drink_name: name, size, ingredients }).then(() => location.reload());
   });
 
+  addDeleteCard(sec, recipes, 'recipes', 'Recipe id (copy from a card)');
   return sec;
 }
 
@@ -734,7 +776,7 @@ async function renderOverhead() {
   const table = document.createElement('table');
   const thead = document.createElement('thead');
   const hrow = document.createElement('tr');
-  ['Label', 'Amount', 'Period', 'Monthly ₱'].forEach(h => {
+  ['id', 'Label', 'Amount', 'Period', 'Monthly ₱'].forEach(h => {
     const th = document.createElement('th'); th.textContent = h; hrow.appendChild(th);
   });
   thead.appendChild(hrow);
@@ -746,10 +788,10 @@ async function renderOverhead() {
     const monthly = (o.period === 'annual') ? amt / 12 : amt;
     monthlyTotal += monthly;
     const tr = document.createElement('tr');
-    const cells = [o.label, peso(amt), o.period, peso(monthly)];
+    const cells = [String(o.id).slice(0, 8), o.label, peso(amt), o.period, peso(monthly)];
     cells.forEach((val, i) => {
       const td = document.createElement('td');
-      if (i === 1 || i === 3) td.className = 'peso';
+      if (i === 2 || i === 4) td.className = 'peso';
       td.textContent = String(val);
       tr.appendChild(td);
     });
@@ -825,6 +867,8 @@ async function renderOverhead() {
     }
   });
 
+  addDeleteCard(sec, overhead, 'overhead', 'Overhead id (copy from a row)');
+
   return sec;
 }
 
@@ -872,14 +916,14 @@ async function renderPricing() {
   const sellByKey = {};
   for (const pr of pricing) {
     const key = `${pr.drink_name}||${pr.size}`;
-    if (sellByKey[key] == null) sellByKey[key] = Number(pr.sell_price);
+    if (sellByKey[key] == null) sellByKey[key] = pr;
   }
 
   // table: one row per recipe, with cost / overhead / sell / margin
   const table = document.createElement('table');
   const thead = document.createElement('thead');
   const hrow = document.createElement('tr');
-  ['Drink', 'Size', 'Recipe cost', 'Overhead / cup', 'All-in cost', 'Sell price', 'Margin'].forEach(h => {
+  ['id', 'Drink', 'Size', 'Recipe cost', 'Overhead / cup', 'All-in cost', 'Sell price', 'Margin'].forEach(h => {
     const th = document.createElement('th'); th.textContent = h; hrow.appendChild(th);
   });
   thead.appendChild(hrow);
@@ -890,18 +934,20 @@ async function renderPricing() {
       const ing = Array.isArray(rc.ingredients) ? rc.ingredients : [];
       const rcost = recipeCost(ing);
       const allIn = rcost + OVERHEAD_PER_CUP;
-      const sell = sellByKey[`${rc.drink_name}||${rc.size}`];
+      const sellRow = sellByKey[`${rc.drink_name}||${rc.size}`];
+      const sell = sellRow == null ? null : Number(sellRow.sell_price);
       const margin = (sell == null) ? null : sell - allIn;
       const tr = document.createElement('tr');
       const cells = [
+        sellRow == null ? '—' : String(sellRow.id).slice(0, 8),
         rc.drink_name, rc.size, peso(rcost), peso(OVERHEAD_PER_CUP), peso(allIn),
         sell == null ? '—' : peso(sell),
         margin == null ? '—' : peso(Math.round(margin * 100) / 100),
       ];
       cells.forEach((val, i) => {
         const td = document.createElement('td');
-        if (i === 2 || i === 3 || i === 4 || i === 5) td.className = 'peso';
-        if (i === 6 && margin != null) {
+        if (i === 3 || i === 4 || i === 5 || i === 6) td.className = 'peso';
+        if (i === 7 && margin != null) {
           td.className = margin >= 0 ? 'pos' : 'neg';
           td.textContent = (margin < 0 ? '-' : '') + peso(Math.abs(Math.round(margin * 100) / 100));
         } else {
@@ -957,6 +1003,8 @@ async function renderPricing() {
     // newest row wins (latest sell price per drink·size), so a POST is enough.
     postData('pricing', { drink_name: name, size, sell_price: price }).then(() => location.reload());
   });
+
+  addDeleteCard(sec, pricing, 'pricing', 'Sell-price id (copy from a row)');
 
   return sec;
 }
@@ -1074,7 +1122,7 @@ async function renderOrdering() {
         const label = rc ? `${rc.drink_name} · ${rc.size}` : '?';
         return `${label} × ${Number(ln.qty)}`;
       }).join(' · ');
-      line.textContent = `${o.date || ''} — ${desc || '(no lines)'} — ${peso(o.running_total)}`;
+      line.textContent = `id ${String(o.id).slice(0, 8)} — ${o.date || ''} — ${desc || '(no lines)'} — ${peso(o.running_total)}`;
       hist.appendChild(line);
     }
     sec.appendChild(hist);
@@ -1160,6 +1208,7 @@ async function renderOrdering() {
     postData('orders', body).then(() => location.reload());
   });
 
+  addDeleteCard(sec, orders, 'orders', 'Order id (copy from a ticket)');
   addPrintButton(sec, 'Print order ticket');
   return sec;
 }

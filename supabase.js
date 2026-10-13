@@ -40,3 +40,15 @@ async function patchData(table, query, obj) {
   const text = await res.text();
   return text === '' ? null : JSON.parse(text);
 }
+
+// Delete rows matching a query (e.g. `id=eq.<uuid>`). Supabase returns 204
+// with an empty body on success, so never blindly parse the response.
+async function deleteData(table, query) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${encodeURIComponent(table)}?${query}`, {
+    method: 'DELETE',
+    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+  });
+  if (!res.ok) throw new Error(`Supabase DELETE ${table}: HTTP ${res.status}`);
+  const text = await res.text();
+  return text === '' ? null : JSON.parse(text);
+}
