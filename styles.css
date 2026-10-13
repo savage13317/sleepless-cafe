@@ -68,6 +68,14 @@ tbody tr:nth-child(even) { background: rgba(255,255,255,.02); }
 .neg { color: var(--red); }
 .empty-note { color: var(--ink-dim); font-style: italic; }
 
+/* ---- dropdown (unit of measure) ---- */
+select.field {
+  background: var(--bg-raised); color: var(--ink);
+  border: 1px solid var(--bg-line); border-radius: var(--radius);
+  padding: 8px 14px; font-size: .9rem; font-family: var(--font);
+}
+select.field option { background: var(--bg-raised); color: var(--ink); }
+
 /* ---- Phase 9: horizontal-scroll wrapper for wide tables (mobile) ---- */
 .table-wrap { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 0 16px; }
 .table-wrap > table { width: 100%; }
@@ -96,7 +104,7 @@ tbody tr:nth-child(even) { background: rgba(255,255,255,.02); }
   .gate { display: none; }
   header { position: static; }
   .btn-print, .btn-add, .btn-restock, .btn-record, .btn-save, .btn-price,
-  .btn-set, .btn-submit, input.field, input.lock { display: none; }
+  .btn-set, .btn-submit, input.field, input.lock, select.field { display: none; }
   .table-wrap { overflow-x: visible; }
   .peso { color: #7a5a1f; }
   .pos { color: #2f6b2f; }

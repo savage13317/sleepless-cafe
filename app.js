@@ -352,8 +352,23 @@ async function renderPurchases() {
     ['pack_size', 'Measure per pack'], ['cost_per_pack', 'Cost per pack (₱)'],
     ['qty_packs', 'Number of packs'], ['low_at', 'Low threshold'],
   ];
+  const UOM_CHOICES = ['ml', 'mg', 'g'];
   const inputs = {};
   fields.forEach(([k, label]) => {
+    if (k === 'base_unit') {
+      // dropdown instead of free text
+      const sel = document.createElement('select');
+      sel.className = 'field'; sel.dataset.key = k;
+      sel.setAttribute('aria-label', label);
+      UOM_CHOICES.forEach(u => {
+        const opt = document.createElement('option');
+        opt.value = u; opt.textContent = u;
+        sel.appendChild(opt);
+      });
+      inputs[k] = sel;
+      form.appendChild(sel);
+      return;
+    }
     const inp = document.createElement('input');
     inp.className = 'field'; inp.dataset.key = k;
     inp.setAttribute('placeholder', label);
