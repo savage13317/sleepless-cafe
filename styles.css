@@ -76,6 +76,13 @@ select.field {
 }
 select.field option { background: var(--bg-raised); color: var(--ink); }
 
+/* ---- live auto-computed total box ---- */
+.total-box {
+  display: inline-block; margin: 8px 0 0;
+  background: var(--bg-line); color: var(--ink);
+  border-radius: var(--radius); padding: 6px 14px; font-size: .9rem;
+}
+
 /* ---- Phase 9: horizontal-scroll wrapper for wide tables (mobile) ---- */
 .table-wrap { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 0 16px; }
 .table-wrap > table { width: 100%; }

@@ -378,6 +378,26 @@ async function renderPurchases() {
     inputs[k] = inp;
     form.appendChild(inp);
   });
+
+  // live "Total cost" box — auto-computes cost/pack x packs as you type
+  const totalBox = document.createElement('div');
+  totalBox.className = 'total-box';
+  const totalLabel = document.createElement('span');
+  totalLabel.textContent = 'Total cost: ';
+  const totalVal = document.createElement('span');
+  totalVal.className = 'peso';
+  totalBox.append(totalLabel, totalVal);
+  form.appendChild(totalBox);
+
+  function updateTotal() {
+    const cp = Number(inputs.cost_per_pack.value);
+    const pk = Number(inputs.qty_packs.value);
+    totalVal.textContent = (cp > 0 && pk > 0) ? peso(Math.round(cp * pk * 100) / 100) : '—';
+  }
+  updateTotal();
+  inputs.cost_per_pack.addEventListener('input', updateTotal);
+  inputs.qty_packs.addEventListener('input', updateTotal);
+
   const addBtn = document.createElement('button');
   addBtn.className = 'btn-add'; addBtn.textContent = 'Add purchase';
   form.appendChild(addBtn);
