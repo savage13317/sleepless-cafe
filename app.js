@@ -532,6 +532,12 @@ async function renderPurchases() {
   // container shows ~5 recent rows and scrolls vertically for older history.
   let editingRowId = null;
   let editingRow = null; // the row the Edit button opened, for name/code re-checks
+  // R20: per-row delete with a two-step confirm (first click arms the prompt,
+  // second click on the SAME row's button deletes only that purchase line).
+  let pendingDelRowId = null;
+  let armedDelBtn = null;
+  const delConfirm = document.createElement('div');
+  delConfirm.className = 'del-confirm';
   const table = document.createElement('table');
   const cap = document.createElement('caption');
   cap.className = 'tbl-caption';
@@ -539,7 +545,7 @@ async function renderPurchases() {
   table.appendChild(cap);
   const thead = document.createElement('thead');
   const hrow = document.createElement('tr');
-  ['Date', 'Inv ID', 'Item / Ingredient', 'Unit', 'Total UOM', '₱ / pack', 'Total price', '₱ / base', 'On hand', 'Edit'].forEach(h => {
+  ['Date', 'Inv ID', 'Item / Ingredient', 'Unit', 'Total UOM', '₱ / pack', 'Total price', '₱ / base', 'On hand', 'Edit', 'Delete'].forEach(h => {
     const th = document.createElement('th'); th.textContent = h; hrow.appendChild(th);
   });
   thead.appendChild(hrow);
@@ -587,6 +593,31 @@ async function renderPurchases() {
     });
     editTd.appendChild(editBtn);
     tr.appendChild(editTd);
+    // R20: per-row Delete. First click arms a confirm prompt under the table;
+    // a second click on the SAME row's button deletes ONLY that purchase line
+    // (id=eq.<rowId>) — other purchases of the same item are untouched.
+    const delTd = document.createElement('td');
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn-row-del';
+    delBtn.textContent = 'Delete';
+    delBtn.addEventListener('click', () => {
+      const rid = String(r.id);
+      if (pendingDelRowId === rid) {
+        deleteData('purchases', `id=eq.${encodeURIComponent(rid)}`).then(() => location.reload());
+        return;
+      }
+      if (armedDelBtn && armedDelBtn !== delBtn) {
+        armedDelBtn.textContent = 'Delete';
+        armedDelBtn.classList.remove('armed');
+      }
+      pendingDelRowId = rid;
+      armedDelBtn = delBtn;
+      delBtn.textContent = 'Confirm?';
+      delBtn.classList.add('armed');
+      delConfirm.textContent = `Delete this purchase — ${dateStr} · ${r.inventory_code || '—'} ${r.name || ''} · ${totalUom} ${r.base_unit}? Click "Confirm?" on the same row again to delete just this line. Clicking another row's Delete cancels.`;
+    });
+    delTd.appendChild(delBtn);
+    tr.appendChild(delTd);
     tbody.appendChild(tr);
   }
   table.append(thead, tbody);
@@ -594,6 +625,7 @@ async function renderPurchases() {
   scrollWrap.className = 'scroll-y';
   scrollWrap.appendChild(table);
   sec.appendChild(scrollWrap);
+  sec.appendChild(delConfirm);
 
   // §3 R3: aggregated inventory — ONE row per inventory_code (latest cost wins).
   // The table above is the audit record (every purchase); this is the merged view.
@@ -892,7 +924,7 @@ async function renderPurchases() {
   const delCard = document.createElement('div');
   delCard.className = 'card';
   const delHead = document.createElement('div');
-  delHead.textContent = 'Delete purchases by Inventory ID';
+  delHead.textContent = 'Delete ALL purchases of an item (by Inventory ID)';
   const delInp = document.createElement('input');
   delInp.className = 'field';
   delInp.setAttribute('placeholder', 'Inventory ID (SC…)');
