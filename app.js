@@ -592,35 +592,45 @@ async function renderPurchases() {
   });
 
   // sleeprev §2.1/§2.2 LIVE suggestions: as you type an item name, show matching
-  // inventory items and auto-fill the Inventory ID box when the match is unique.
-  // This runs on every keystroke, so it works even after the box loses focus.
+  // inventory items. The Inventory ID box is auto-filled ONLY once the user moves
+  // focus away from the name box (e.g. to "Measure per pack"), so it never fights
+  // with active typing. The match is one-directional (the typed text must be a
+  // substring of an existing item name) so "milk1" does NOT merge with "Milk".
   const suggBox = document.createElement('div');
   suggBox.className = 'suggestion';
   form.appendChild(suggBox);
+  const idField = inputs.inventory_code;
   let autoFilledCode = '';
+  const matchName = (typed) => invItems.filter(it => it.name.toLowerCase().includes(typed));
   function updateNameSuggestion() {
-    const idField = inputs.inventory_code;
     const typed = String(inputs.name.value || '').trim().toLowerCase();
-    const clearAuto = () => {
-      if (autoFilledCode && idField.value.trim().toUpperCase() === autoFilledCode) { idField.value = ''; autoFilledCode = ''; }
-    };
-    if (!typed) { clearAuto(); suggBox.textContent = ''; return; }
-    const matches = invItems.filter(it => {
-      const n = it.name.toLowerCase();
-      return n.includes(typed) || typed.includes(n);
-    });
-    if (!matches.length) { clearAuto(); suggBox.textContent = ''; return; }
-    suggBox.textContent = 'In inventory: ' + matches.map(it => `${it.name} (${it.code})`).join(', ');
-    if (matches.length === 1) {
-      const code = matches[0].code;
-      const cur = idField.value.trim().toUpperCase();
-      if (cur === '' || cur === autoFilledCode) { idField.value = code; autoFilledCode = code; }
-    } else {
-      clearAuto();
+    if (!typed) { suggBox.textContent = ''; return; }
+    const matches = matchName(typed);
+    suggBox.textContent = matches.length
+      ? 'In inventory: ' + matches.map(it => `${it.name} (${it.code})`).join(', ')
+      : 'New item — no inventory match';
+    // if the name changed so our auto-filled ID no longer applies, clear it
+    if (autoFilledCode && !matches.some(it => it.code === autoFilledCode)) {
+      idField.value = ''; autoFilledCode = '';
     }
   }
+  function applyAutoId() {
+    const typed = String(inputs.name.value || '').trim().toLowerCase();
+    if (!typed) return;
+    const matches = matchName(typed);
+    if (matches.length !== 1) return;
+    const code = matches[0].code;
+    const cur = idField.value.trim().toUpperCase();
+    if (cur === '' || cur === autoFilledCode) { idField.value = code; autoFilledCode = code; }
+  }
+  // suggestion text updates live on every keystroke of the name box
   inputs.name.addEventListener('input', updateNameSuggestion);
   updateNameSuggestion();
+  // the ID box is populated only when focus moves to a downstream field
+  // (Measure per pack / Cost per pack / Number of packs / Low threshold)
+  ['pack_size', 'cost_per_pack', 'qty_packs', 'low_at'].forEach(k => {
+    inputs[k].addEventListener('focus', applyAutoId);
+  });
 
   // live "Total cost" box — auto-computes cost/pack x packs as you type
   const totalBox = document.createElement('div');
