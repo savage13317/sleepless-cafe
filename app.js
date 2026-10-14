@@ -122,6 +122,31 @@ async function soldByPurchase() {
   return sold;
 }
 
+// ---- R2: inventory ID scheme (SC0001 monotonic counter) ----
+// settings.next_inventory_seq is the single source of truth. NEVER scan for the
+// lowest free number — deleted codes are never reused. If the counter is missing
+// or null, fall back to max(existing codes) + 1 so the scheme self-heals.
+async function nextInventoryCode() {
+  let settings = [];
+  let purchases = [];
+  try {
+    settings = await getData('settings', 'select=*');
+    purchases = await getData('purchases', 'select=inventory_code');
+  } catch (e) { /* fall through to defaults */ }
+  const row = settings[0];
+  let seq = row && row.next_inventory_seq != null ? Number(row.next_inventory_seq) : null;
+  if (!Number.isFinite(seq) || seq < 1) {
+    let max = 0;
+    for (const p of purchases) {
+      const m = /^SC(\d+)$/i.exec(String(p.inventory_code || '').trim());
+      if (m) max = Math.max(max, parseInt(m[1], 10));
+    }
+    seq = max + 1;
+  }
+  const code = 'SC' + String(seq).padStart(4, '0');
+  return { code, seq, settingsId: row ? String(row.id) : null };
+}
+
 async function buildSite() {
   const stage = document.getElementById('stage');
 
@@ -314,7 +339,7 @@ async function renderPurchases() {
   const table = document.createElement('table');
   const thead = document.createElement('thead');
   const hrow = document.createElement('tr');
-  ['id', 'Item / Ingredient', 'Unit', 'Measure / pack', 'Packs', 'Total UOM', '₱ / pack', 'Total price', '₱ / base', 'On hand', 'Low?'].forEach(h => {
+  ['id', 'Inv ID', 'Item / Ingredient', 'Unit', 'Measure / pack', 'Packs', 'Total UOM', '₱ / pack', 'Total price', '₱ / base', 'On hand', 'Low?'].forEach(h => {
     const th = document.createElement('th'); th.textContent = h; hrow.appendChild(th);
   });
   thead.appendChild(hrow);
@@ -327,15 +352,15 @@ async function renderPurchases() {
     const totalUom = packs * Number(r.pack_size);
     const tr = document.createElement('tr');
     const cells = [
-      String(r.id).slice(0, 8), r.name, r.base_unit, `${Number(r.pack_size)} ${r.base_unit}`, packs,
+      String(r.id).slice(0, 8), r.inventory_code || '—', r.name, r.base_unit, `${Number(r.pack_size)} ${r.base_unit}`, packs,
       `${totalUom} ${r.base_unit}`, peso(perPack), peso(r.cost_price), rate(pricePerBase(r)),
       `${oh} ${r.base_unit}`, low ? 'LOW' : '',
     ];
     cells.forEach((val, i) => {
       const td = document.createElement('td');
-      if (i === 6 || i === 7) td.className = 'peso';
-      if (i === 8) td.className = 'peso';
-      if (i === 10 && low) { td.className = 'neg'; td.textContent = 'LOW'; }
+      if (i === 7 || i === 8) td.className = 'peso';
+      if (i === 9) td.className = 'peso';
+      if (i === 11 && low) { td.className = 'neg'; td.textContent = 'LOW'; }
       else td.textContent = String(val);
       tr.appendChild(td);
     });
@@ -403,7 +428,7 @@ async function renderPurchases() {
   form.appendChild(addBtn);
   sec.appendChild(form);
 
-  addBtn.addEventListener('click', () => {
+  addBtn.addEventListener('click', async () => {
     const obj = {};
     for (const [k] of fields) {
       const v = inputs[k].value.trim();
@@ -418,7 +443,14 @@ async function renderPurchases() {
     const packs = obj.qty_packs == null ? 1 : obj.qty_packs;
     obj.cost_price = Math.round(obj.cost_per_pack * packs * 100) / 100;
     delete obj.cost_per_pack;
-    postData('purchases', obj).then(() => location.reload());
+    // R2: assign the next inventory code from the monotonic counter, then bump it.
+    const { code, seq, settingsId } = await nextInventoryCode();
+    obj.inventory_code = code;
+    postData('purchases', obj).then(() => {
+      if (settingsId) patchData('settings', `id=eq.${settingsId}`, { next_inventory_seq: seq + 1 });
+      else postData('settings', { next_inventory_seq: seq + 1 });
+      location.reload();
+    });
   });
 
   addDeleteCard(sec, rows, 'purchases', 'Purchase id (copy from a row)');
