@@ -205,8 +205,10 @@ async function inventoryRows() {
       if (String(r.created_at || '') > String(newest.created_at || '')) newest = r;
     }
     let totalOum = 0;
+    let totalCost = 0;
     for (const r of g.rows) {
       totalOum += Number(r.qty_packs) * Number(r.pack_size);
+      totalCost += Number(r.cost_price);
     }
     const soldForItem = Number(sold[code] || 0); // sold map is keyed by inventory_code (R6)
     const recorded = totalOum - soldForItem;
@@ -216,7 +218,7 @@ async function inventoryRows() {
     const lowAt = Number(newest.low_at);
     items.push({
       code, name: newest.name, base_unit: newest.base_unit,
-      totalOum, recorded, actual, remaining, rate, lowAt, low: remaining < lowAt,
+      totalOum, totalCost, recorded, actual, remaining, rate, lowAt, low: remaining < lowAt,
       newest, rowCount: g.rows.length,
     });
   }
@@ -229,7 +231,7 @@ function inventoryTable(items) {
   const table = document.createElement('table');
   const thead = document.createElement('thead');
   const hrow = document.createElement('tr');
-  ['Inventory ID', 'Item', 'UOM', 'Remaining', '₱ / OUM', 'Stock value ₱', 'Low?'].forEach(h => {
+  ['Inventory ID', 'Item', 'UOM', 'Remaining', '₱ / OUM', 'Stock value ₱', 'Total cost ₱', 'Low?'].forEach(h => {
     const th = document.createElement('th'); th.textContent = h; hrow.appendChild(th);
   });
   const theadEl = thead; theadEl.appendChild(hrow);
@@ -237,11 +239,11 @@ function inventoryTable(items) {
   for (const it of items) {
     const stockVal = it.remaining * it.rate;
     const tr = document.createElement('tr');
-    const cells = [it.code, it.name, it.base_unit, `${it.remaining} ${it.base_unit}`, rate(it.rate), peso(stockVal), it.low ? 'LOW' : ''];
+    const cells = [it.code, it.name, it.base_unit, `${it.remaining} ${it.base_unit}`, rate(it.rate), peso(stockVal), peso(it.totalCost), it.low ? 'LOW' : ''];
     cells.forEach((val, i) => {
       const td = document.createElement('td');
-      if (i === 4 || i === 5) td.className = 'peso';
-      if (i === 6 && it.low) { td.className = 'neg'; td.textContent = 'LOW'; }
+      if (i === 4 || i === 5 || i === 6) td.className = 'peso';
+      if (i === 7 && it.low) { td.className = 'neg'; td.textContent = 'LOW'; }
       else td.textContent = String(val);
       tr.appendChild(td);
     });
@@ -251,6 +253,11 @@ function inventoryTable(items) {
   return table;
 }
 
+// ---- R13: one view per module (no continuous scroll) ----
+// The user wants a page/tab per module: only the selected module's section is in
+// the DOM at a time. The nav bar switches views — clicking a nav link clears
+// `main`, renders just that module, and marks the nav link active. Data is
+// re-fetched on each switch, so views always show live Supabase state.
 async function buildSite() {
   const stage = document.getElementById('stage');
 
@@ -260,7 +267,7 @@ async function buildSite() {
   brand.innerHTML = 'Sleepless Café <span class="mark">·</span> staff reference';
   const nav = document.createElement('nav');
   const dash = document.createElement('a');
-  dash.href = '#dashboard'; dash.textContent = 'Dashboard'; dash.setAttribute('data-active', '1');
+  dash.href = '#dashboard'; dash.textContent = 'Dashboard';
   nav.appendChild(dash);
   PAGES.forEach(p => {
     const a = document.createElement('a');
@@ -270,19 +277,46 @@ async function buildSite() {
   header.append(brand, nav);
 
   const main = document.createElement('main');
-  main.appendChild(await renderDashboard());
-  for (const p of PAGES) {
-    if (p.id === 'purchases') main.appendChild(await renderPurchases());
-    else if (p.id === 'inventory') main.appendChild(await renderInventory());
-    else if (p.id === 'recipes') main.appendChild(await renderRecipes());
-    else if (p.id === 'overhead') main.appendChild(await renderOverhead());
-    else if (p.id === 'pricing') main.appendChild(await renderPricing());
-    else if (p.id === 'daily-sales') main.appendChild(await renderDailySales());
-    else main.appendChild(section(p.id, p.title, p.sub));
-  }
-
   stage.innerHTML = '';
   stage.append(header, main);
+
+  // intercept nav clicks: switch the view instead of scrolling within one page
+  nav.addEventListener('click', (ev) => {
+    const a = ev.target.closest('a');
+    if (!a) return;
+    ev.preventDefault();
+    const id = a.getAttribute('href').slice(1);
+    showModule(id, main, nav, a);
+  });
+
+  await showModule('dashboard', main, nav, dash);
+}
+
+async function showModule(id, main, nav, activeA) {
+  let sec = null;
+  try {
+    if (id === 'dashboard') sec = await renderDashboard();
+    else if (id === 'purchases') sec = await renderPurchases();
+    else if (id === 'inventory') sec = await renderInventory();
+    else if (id === 'recipes') sec = await renderRecipes();
+    else if (id === 'overhead') sec = await renderOverhead();
+    else if (id === 'pricing') sec = await renderPricing();
+    else if (id === 'daily-sales') sec = await renderDailySales();
+    else {
+      const p = PAGES.find(x => x.id === id);
+      if (p) sec = section(p.id, p.title, p.sub);
+    }
+  } catch (e) { /* keep the previous view if a switch fails */ }
+  if (!sec) return;
+
+  main.innerHTML = '';
+  main.appendChild(sec);
+
+  // mark the active nav link (styles.css highlights [data-active])
+  for (const a of nav.querySelectorAll('a')) {
+    if (a === activeA) a.setAttribute('data-active', '1');
+    else a.removeAttribute('data-active');
+  }
 
   // Phase 9: wrap every table in a horizontal-scroll container so wide tables
   // stay readable on narrow (mobile) viewports instead of squishing.
@@ -482,7 +516,7 @@ async function renderPurchases() {
   const table = document.createElement('table');
   const thead = document.createElement('thead');
   const hrow = document.createElement('tr');
-  ['id', 'Inv ID', 'Item / Ingredient', 'Unit', 'Measure / pack', 'Packs', 'Total UOM', '₱ / pack', 'Total price', '₱ / base', 'On hand', 'Low?'].forEach(h => {
+  ['Inv ID', 'Item / Ingredient', 'Unit', 'Total UOM', '₱ / pack', 'Total price', '₱ / base', 'On hand', 'Low?'].forEach(h => {
     const th = document.createElement('th'); th.textContent = h; hrow.appendChild(th);
   });
   thead.appendChild(hrow);
@@ -495,15 +529,14 @@ async function renderPurchases() {
     const totalUom = packs * Number(r.pack_size);
     const tr = document.createElement('tr');
     const cells = [
-      String(r.id).slice(0, 8), r.inventory_code || '—', r.name, r.base_unit, `${Number(r.pack_size)} ${r.base_unit}`, packs,
+      r.inventory_code || '—', r.name, r.base_unit,
       `${totalUom} ${r.base_unit}`, peso(perPack), peso(r.cost_price), rate(pricePerBase(r)),
       `${oh} ${r.base_unit}`, low ? 'LOW' : '',
     ];
     cells.forEach((val, i) => {
       const td = document.createElement('td');
-      if (i === 7 || i === 8) td.className = 'peso';
-      if (i === 9) td.className = 'peso';
-      if (i === 11 && low) { td.className = 'neg'; td.textContent = 'LOW'; }
+      if (i === 4 || i === 5 || i === 6) td.className = 'peso';
+      if (i === 8 && low) { td.className = 'neg'; td.textContent = 'LOW'; }
       else td.textContent = String(val);
       tr.appendChild(td);
     });
@@ -528,6 +561,7 @@ async function renderPurchases() {
   const form = document.createElement('div');
   form.className = 'card';
   const fields = [
+    ['inventory_code', 'Inventory ID (SC…, blank = auto)'],
     ['name', 'Item / Ingredient'], ['base_unit', 'Unit of measure (base unit)'],
     ['pack_size', 'Measure per pack'], ['cost_per_pack', 'Cost per pack (₱)'],
     ['qty_packs', 'Number of packs'], ['low_at', 'Low threshold'],
@@ -590,6 +624,44 @@ async function renderPurchases() {
       if (v === '') continue;
       obj[k] = (k === 'pack_size' || k === 'qty_packs' || k === 'cost_per_pack' || k === 'low_at') ? Number(v) : v;
     }
+    // sleeprev §2.1/§2.2: Inventory ID box. Blank -> auto-produce the next code.
+    // An entered ID that matches an existing item RESTOCKS that item: it reuses
+    // the code (never bumps the counter) and auto-pulls the item name + UOM from
+    // inventory. A typed item name with no ID shows a suggestion of matching items.
+    let enteredCode = String(obj.inventory_code || '').trim().toUpperCase();
+    delete obj.inventory_code;
+    let invItems = [];
+    try { invItems = await inventoryRows(); } catch (e) { invItems = []; }
+    const byCode = {};
+    for (const it of invItems) byCode[it.code] = it;
+    // sleeprev §2.1: typing an item name with a BLANK Inventory ID auto-generates the
+    // ID. If the name matches an existing item, reuse that item's code (restock);
+    // otherwise the next new code is produced below.
+    const typedName = String(obj.name || '').trim().toLowerCase();
+    if (typedName && !enteredCode) {
+      const matches = invItems.filter(it => it.name.toLowerCase().includes(typedName));
+      if (matches.length) {
+        const ex = matches[0];
+        enteredCode = ex.code;
+        obj.base_unit = ex.base_unit; // inherit UOM from the matched inventory row
+        const w = document.createElement('div'); w.className = 'num';
+        w.textContent = `Matched existing item ${ex.name} — auto Inventory ID ${ex.code} (restock). Not what you meant? Enter a new ID or a new item name.`;
+        form.appendChild(w);
+      }
+    }
+    if (enteredCode && !byCode[enteredCode]) {
+      const w = document.createElement('div'); w.className = 'num';
+      w.textContent = `No existing item uses ${enteredCode} — it will be created as a new inventory code.`;
+      form.appendChild(w);
+    }
+    if (enteredCode && byCode[enteredCode]) {
+      const ex = byCode[enteredCode];
+      if (!obj.name) obj.name = ex.name;            // auto-pull item/ingredient from inventory
+      obj.base_unit = ex.base_unit;                 // inherit UOM from the inventory row
+      const w = document.createElement('div'); w.className = 'num';
+      w.textContent = `Restocking ${enteredCode} — ${ex.name} (${ex.base_unit}). This new purchase sets the new ₱/OUM.`;
+      form.appendChild(w);
+    }
     if (!obj.name || obj.pack_size == null || obj.cost_per_pack == null || !obj.base_unit) {
       const w = document.createElement('div'); w.className = 'neg'; w.textContent = 'Item, pack size, base unit and cost per pack are required.';
       form.appendChild(w); return;
@@ -598,17 +670,59 @@ async function renderPurchases() {
     const packs = obj.qty_packs == null ? 1 : obj.qty_packs;
     obj.cost_price = Math.round(obj.cost_per_pack * packs * 100) / 100;
     delete obj.cost_per_pack;
-    // R2: assign the next inventory code from the monotonic counter, then bump it.
-    const { code, seq, settingsId } = await nextInventoryCode();
-    obj.inventory_code = code;
-    postData('purchases', obj).then(() => {
-      if (settingsId) patchData('settings', `id=eq.${settingsId}`, { next_inventory_seq: seq + 1 });
-      else postData('settings', { next_inventory_seq: seq + 1 });
-      location.reload();
-    });
+    if (enteredCode) {
+      // matched -> reuse the existing code (restock); unmatched -> user-defined new code.
+      // Either way the monotonic counter is NOT bumped (deleted/used numbers never reused).
+      obj.inventory_code = enteredCode;
+      // If a user-typed NEW code would collide with a future auto code, nudge the
+      // counter past it so the auto scheme never hands out a used number.
+      const m = /^SC(\d+)$/.exec(enteredCode);
+      const { seq, settingsId } = await nextInventoryCode();
+      const bump = m && settingsId && parseInt(m[1], 10) >= seq
+        ? patchData('settings', `id=eq.${settingsId}`, { next_inventory_seq: parseInt(m[1], 10) + 1 })
+        : Promise.resolve();
+      bump.then(() => postData('purchases', obj)).then(() => location.reload());
+    } else {
+      // blank -> auto-produce the next code from the counter, then bump it (R2).
+      const { code, seq, settingsId } = await nextInventoryCode();
+      obj.inventory_code = code;
+      postData('purchases', obj).then(() => {
+        if (settingsId) patchData('settings', `id=eq.${settingsId}`, { next_inventory_seq: seq + 1 });
+        else postData('settings', { next_inventory_seq: seq + 1 });
+        location.reload();
+      });
+    }
   });
 
-  addDeleteCard(sec, rows, 'purchases', 'Purchase id (copy from a row)');
+  // Delete purchases by Inventory ID (the audit table no longer shows UUIDs, so
+  // the visible Inventory ID is the handle). Deletes every purchase row of that item.
+  const delCard = document.createElement('div');
+  delCard.className = 'card';
+  const delHead = document.createElement('div');
+  delHead.textContent = 'Delete purchases by Inventory ID';
+  const delInp = document.createElement('input');
+  delInp.className = 'field';
+  delInp.setAttribute('placeholder', 'Inventory ID (SC…)');
+  delInp.setAttribute('aria-label', 'Inventory ID to delete');
+  const delBtn = document.createElement('button');
+  delBtn.className = 'btn-delete';
+  delBtn.textContent = 'Delete';
+  delCard.append(delHead, delInp, delBtn);
+  sec.appendChild(delCard);
+  delBtn.addEventListener('click', () => {
+    const code = delInp.value.trim().toUpperCase();
+    if (!code) {
+      const w = document.createElement('div'); w.className = 'neg';
+      w.textContent = 'Enter an Inventory ID to delete.';
+      delCard.appendChild(w); return;
+    }
+    if (!rows.some(r => String(r.inventory_code || '').trim().toUpperCase() === code)) {
+      const w = document.createElement('div'); w.className = 'neg';
+      w.textContent = 'No purchases use that Inventory ID.';
+      delCard.appendChild(w); return;
+    }
+    deleteData('purchases', `inventory_code=eq.${encodeURIComponent(code)}`).then(() => location.reload());
+  });
   return sec;
 }
 

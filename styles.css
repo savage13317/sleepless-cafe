@@ -45,8 +45,8 @@ header .brand { font-weight: 700; letter-spacing: .05em; white-space: nowrap; }
 header .brand .mark { color: var(--amber); }
 nav { display: flex; flex-wrap: wrap; gap: 18px; padding: 0 0 0 0; }
 nav a { color: var(--ink-dim); text-decoration: none; font-size: .92rem; white-space: nowrap; }
-nav a:hover, nav a.active { color: var(--amber); }
-nav a.active { font-weight: 700; }
+nav a:hover, nav a.active, nav a[data-active] { color: var(--amber); }
+nav a.active, nav a[data-active] { font-weight: 700; }
 
 /* ---- layout ---- */
 main { padding: 22px 20px 40px; max-width: 1100px; }
