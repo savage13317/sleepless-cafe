@@ -67,6 +67,7 @@ tbody tr:nth-child(even) { background: rgba(255,255,255,.02); }
 .pos { color: var(--green); }
 .neg { color: var(--red); }
 .empty-note { color: var(--ink-dim); font-style: italic; }
+.suggestion { color: var(--ink-dim); font-style: italic; font-size: .85rem; margin: 6px 0 0; }
 
 /* ---- dropdown (unit of measure) ---- */
 select.field {
