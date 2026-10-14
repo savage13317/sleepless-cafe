@@ -579,6 +579,9 @@ async function renderPurchases() {
       inputs.qty_packs.value = String(r.qty_packs);
       inputs.cost_per_pack.value = String(r.qty_packs ? Number(r.cost_price) / Number(r.qty_packs) : Number(r.cost_price));
       inputs.low_at.value = String(r.low_at);
+      // R19b: the box starts with this row's code, but treat it as an auto-fill so
+      // the live suggestion can correct it when the name is edited.
+      autoFilledCode = String(r.inventory_code || '').trim().toUpperCase();
       updateNameSuggestion();
       updateTotal();
     });
@@ -663,9 +666,13 @@ async function renderPurchases() {
     suggBox.textContent = matches.length
       ? 'In inventory: ' + matches.map(it => `${it.name} (${it.code})`).join(', ')
       : 'New item — no inventory match';
-    // if the name changed so our auto-filled ID no longer applies, clear it
+    // if the name changed so our auto-filled ID no longer applies, re-resolve it
     if (autoFilledCode && !matches.some(it => it.code === autoFilledCode)) {
-      idField.value = ''; autoFilledCode = '';
+      // R19b edit mode: the box holds the row's original code — when the edited
+      // name now matches a different inventory item, correct the box live.
+      if (editingRowId && matches.length === 1) {
+        idField.value = matches[0].code; autoFilledCode = matches[0].code;
+      } else { idField.value = ''; autoFilledCode = ''; }
     }
   }
   function applyAutoId() {
