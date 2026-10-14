@@ -91,9 +91,10 @@ function rate(n) {
 function onHand(r, sold = 0) { return Number(r.qty_packs) * Number(r.pack_size) - Number(sold); }
 function pricePerBase(r) { return Number(r.cost_price) / (Number(r.qty_packs) * Number(r.pack_size)); }
 
-// Total sold base-units per purchase_id, expanded from every order line through
-// its recipe's ingredients. Shared by Purchases, Stock-take and Ordering so all
-// three pages show the same draw-down-adjusted on_hand.
+// Total sold base-units per INVENTORY CODE, expanded from every order line through
+// its recipe's ingredients. R6: recipes now store {inventory_code, qty_oum}, so the
+// sold map is keyed by inventory_code (not purchase UUID) — a recipe follows the
+// item across restocks. Shared by Purchases, Stock-take and Ordering.
 async function soldByPurchase() {
   let orders = [];
   let recipes = [];
@@ -114,12 +115,21 @@ async function soldByPurchase() {
       const ings = Array.isArray(rc.ingredients) ? rc.ingredients : [];
       for (const ing of ings) {
         if (!ing) continue;
-        const pid = String(ing.purchase_id);
-        sold[pid] = (sold[pid] || 0) + Number(ing.qty_base) * qty;
+        const code = String(ing.inventory_code || '').trim().toUpperCase();
+        if (!code) continue;
+        sold[code] = (sold[code] || 0) + Number(ing.qty_oum) * qty;
       }
     }
   }
   return sold;
+}
+
+// Current ₱/OUM rate per inventory_code (latest-cost-wins), from inventoryRows().
+// Shared by Recipes (R6) and Pricing (R7) so a recipe follows the item across restocks.
+async function itemRateByCode() {
+  const map = {};
+  for (const it of await inventoryRows()) map[it.code] = it.rate;
+  return map;
 }
 
 // ---- R2: inventory ID scheme (SC0001 monotonic counter) ----
@@ -174,11 +184,10 @@ async function inventoryRows() {
       if (String(r.created_at || '') > String(newest.created_at || '')) newest = r;
     }
     let totalOum = 0;
-    let soldForItem = 0;
     for (const r of g.rows) {
       totalOum += Number(r.qty_packs) * Number(r.pack_size);
-      soldForItem += Number(sold[String(r.id)] || 0);
     }
+    const soldForItem = Number(sold[code] || 0); // sold map is keyed by inventory_code (R6)
     const remaining = totalOum - soldForItem;
     const rate = pricePerBase(newest); // latest purchase wins
     const lowAt = Number(newest.low_at);
@@ -797,17 +806,21 @@ async function renderRecipes() {
     return sec;
   }
 
-  // lookup helpers keyed by purchase id
-  const byId = {};
-  for (const p of purchases) byId[String(p.id)] = p;
+  // R6: recipes reference inventory_code, not purchase UUID. Cost is always live
+  // from the current ₱/OUM of each item (latest-cost-wins), never stored.
+  const rateByCode = await itemRateByCode();
+  const unitByCode = {};
+  const nameByCode = {};
+  for (const it of await inventoryRows()) { unitByCode[it.code] = it.base_unit; nameByCode[it.code] = it.name; }
 
-  // cost of one recipe row, computed live from current ₱/base
+  // cost of one recipe row, computed live from current ₱/OUM per inventory_code
   function recipeCost(ing) {
     if (!Array.isArray(ing)) return 0;
     let sum = 0;
     for (const ln of ing) {
-      const p = ln && byId[String(ln.purchase_id)];
-      if (p) sum += Number(ln.qty_base) * pricePerBase(p);
+      if (!ln) continue;
+      const code = String(ln.inventory_code || '').trim().toUpperCase();
+      if (rateByCode[code] != null) sum += Number(ln.qty_oum) * rateByCode[code];
     }
     return sum;
   }
@@ -828,10 +841,10 @@ async function renderRecipes() {
       if (ing.length) {
         const ul = document.createElement('div');
         ul.textContent = ing.map(ln => {
-          const p = byId[String(ln.purchase_id)];
-          const label = p ? p.name : '?';
-          const unit = p ? p.base_unit : '';
-          return `${ln.qty_base} ${unit} ${label}`;
+          const code = String(ln.inventory_code || '').trim().toUpperCase();
+          const label = nameByCode[code] || '?';
+          const unit = unitByCode[code] || '';
+          return `${ln.qty_oum} ${unit} ${label} (${code})`;
         }).join(' · ');
         card.appendChild(ul);
       }
@@ -847,7 +860,7 @@ async function renderRecipes() {
     sec.appendChild(note);
   }
 
-  // recipe editor form: name + size + up to 6 ingredient (id, qty) pairs
+  // recipe editor form: name + size + up to 6 ingredient (inventory code, qty) pairs
   const form = document.createElement('div');
   form.className = 'card';
   const nameInp = document.createElement('input');
@@ -862,12 +875,12 @@ async function renderRecipes() {
   const ingInputs = [];
   for (let i = 0; i < N_ING; i++) {
     const idInp = document.createElement('input');
-    idInp.className = 'field'; idInp.setAttribute('placeholder', `Ingredient ${i + 1}: purchase id`);
-    idInp.setAttribute('aria-label', `Ingredient ${i + 1} purchase id`);
+    idInp.className = 'field'; idInp.setAttribute('placeholder', `Ingredient ${i + 1}: Inventory ID (SC…)`);
+    idInp.setAttribute('aria-label', `Ingredient ${i + 1} inventory code`);
     const qtyInp = document.createElement('input');
     qtyInp.className = 'field'; qtyInp.type = 'number';
-    qtyInp.setAttribute('placeholder', `qty ${i + 1} (base unit)`);
-    qtyInp.setAttribute('aria-label', `Ingredient ${i + 1} quantity in base unit`);
+    qtyInp.setAttribute('placeholder', `qty ${i + 1} (OUM)`);
+    qtyInp.setAttribute('aria-label', `Ingredient ${i + 1} quantity in OUM`);
     form.append(idInp, qtyInp);
     ingInputs.push([idInp, qtyInp]);
   }
@@ -891,16 +904,15 @@ async function renderRecipes() {
     }
     const ingredients = [];
     for (const [idInp, qtyInp] of ingInputs) {
-      const idKey = idInp.value.trim();
+      const codeKey = idInp.value.trim().toUpperCase();
       const qty = qtyInp.value.trim();
-      if (idKey === '' && qty === '') continue;
-      const p = purchases.find(r => String(r.id) === idKey || String(r.id).startsWith(idKey));
-      if (!p || qty === '' || !(Number(qty) > 0)) {
+      if (codeKey === '' && qty === '') continue;
+      if (!rateByCode[codeKey] || qty === '' || !(Number(qty) > 0)) {
         const w = document.createElement('div'); w.className = 'neg';
-        w.textContent = 'Each ingredient needs a valid purchase id and a positive qty.';
+        w.textContent = 'Each ingredient needs a valid Inventory ID (e.g. SC0001) and a positive qty.';
         form.appendChild(w); return;
       }
-      ingredients.push({ purchase_id: p.id, qty_base: Number(qty) });
+      ingredients.push({ inventory_code: codeKey, qty_oum: Number(qty) });
     }
     if (!ingredients.length) {
       const w = document.createElement('div'); w.className = 'neg';
@@ -1088,11 +1100,9 @@ async function renderPricing() {
   s.textContent = 'Menu + margin per drink/size (staff reference)';
   sec.append(t, s);
 
-  let purchases = [];
   let recipes = [];
   let pricing = [];
   try {
-    purchases = await getData('purchases', 'order=created_at.desc&select=*');
     recipes = await getData('recipes', 'order=created_at.desc&select=*');
     pricing = await getData('pricing', 'order=created_at.desc&select=*');
   } catch (e) {
@@ -1102,15 +1112,16 @@ async function renderPricing() {
     return sec;
   }
 
-  // cost helpers keyed by purchase id (same math as the Recipes page)
-  const byId = {};
-  for (const p of purchases) byId[String(p.id)] = p;
+  // R6/R7: cost helpers keyed by inventory_code (same math as the Recipes page),
+  // so a recipe follows the item across restocks (latest-cost-wins rate).
+  const rateByCode = await itemRateByCode();
   function recipeCost(ing) {
     if (!Array.isArray(ing)) return 0;
     let sum = 0;
     for (const ln of ing) {
-      const p = ln && byId[String(ln.purchase_id)];
-      if (p) sum += Number(ln.qty_base) * pricePerBase(p);
+      if (!ln) continue;
+      const code = String(ln.inventory_code || '').trim().toUpperCase();
+      if (rateByCode[code] != null) sum += Number(ln.qty_oum) * rateByCode[code];
     }
     return sum;
   }
