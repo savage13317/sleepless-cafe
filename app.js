@@ -421,36 +421,6 @@ async function renderPurchases() {
     postData('purchases', obj).then(() => location.reload());
   });
 
-  // restock action: add qty to an existing row, keep its recorded price
-  const restock = document.createElement('div');
-  restock.className = 'card';
-  const idInp = document.createElement('input');
-  idInp.className = 'field'; idInp.setAttribute('placeholder', 'Purchase id (copy from a row)');
-  idInp.setAttribute('aria-label', 'Purchase id');
-  const qtyInp = document.createElement('input');
-  qtyInp.className = 'field'; qtyInp.type = 'number'; qtyInp.setAttribute('placeholder', 'Add packs');
-  qtyInp.setAttribute('aria-label', 'Add packs');
-  const restockBtn = document.createElement('button');
-  restockBtn.className = 'btn-restock'; restockBtn.textContent = 'Restock';
-  restock.append(idInp, qtyInp, restockBtn);
-  sec.appendChild(restock);
-
-  restockBtn.addEventListener('click', () => {
-    const id = idInp.value.trim();
-    const add = Number(qtyInp.value);
-    if (!id || !(add > 0)) {
-      const w = document.createElement('div'); w.className = 'neg'; w.textContent = 'Pick a row and a positive pack count.';
-      restock.appendChild(w); return;
-    }
-    const row = rows.find(r => String(r.id) === id || String(r.id).startsWith(id));
-    if (!row) {
-      const w = document.createElement('div'); w.className = 'neg'; w.textContent = 'No such row.';
-      restock.appendChild(w); return;
-    }
-    patchData('purchases', `id=eq.${encodeURIComponent(row.id)}`, { qty_packs: Number(row.qty_packs) + add })
-      .then(() => location.reload());
-  });
-
   addDeleteCard(sec, rows, 'purchases', 'Purchase id (copy from a row)');
   return sec;
 }
