@@ -147,6 +147,78 @@ async function nextInventoryCode() {
   return { code, seq, settingsId: row ? String(row.id) : null };
 }
 
+// ---- R3/R9: inventory aggregation — ONE row per inventory_code ----
+// Single source of truth shared by M1 §3 and M6 §1 (never two implementations).
+// Group purchase rows by inventory_code. The NEWEST purchase of an item sets the
+// ₱/OUM rate and the low threshold (latest-cost-wins); remaining OUM sums EVERY
+// row of that item minus sold. Rows with no inventory_code are not in the model.
+async function inventoryRows() {
+  let purchases = [];
+  let sold = {};
+  try {
+    purchases = await getData('purchases', 'order=created_at.asc&select=*');
+    sold = await soldByPurchase();
+  } catch (e) { return []; }
+  const byCode = {};
+  for (const r of purchases) {
+    const code = String(r.inventory_code || '').trim().toUpperCase();
+    if (!code) continue;
+    const g = byCode[code] || (byCode[code] = { code, rows: [] });
+    g.rows.push(r);
+  }
+  const items = [];
+  for (const code in byCode) {
+    const g = byCode[code];
+    let newest = g.rows[0];
+    for (const r of g.rows) {
+      if (String(r.created_at || '') > String(newest.created_at || '')) newest = r;
+    }
+    let totalOum = 0;
+    let soldForItem = 0;
+    for (const r of g.rows) {
+      totalOum += Number(r.qty_packs) * Number(r.pack_size);
+      soldForItem += Number(sold[String(r.id)] || 0);
+    }
+    const remaining = totalOum - soldForItem;
+    const rate = pricePerBase(newest); // latest purchase wins
+    const lowAt = Number(newest.low_at);
+    items.push({
+      code, name: newest.name, base_unit: newest.base_unit,
+      totalOum, remaining, rate, lowAt, low: remaining < lowAt,
+      newest, rowCount: g.rows.length,
+    });
+  }
+  items.sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0));
+  return items;
+}
+
+// Render the aggregated inventory table (shared: M1 §3 compact + M6 §1 full).
+function inventoryTable(items) {
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  const hrow = document.createElement('tr');
+  ['Inventory ID', 'Item', 'UOM', 'Remaining', '₱ / OUM', 'Stock value ₱', 'Low?'].forEach(h => {
+    const th = document.createElement('th'); th.textContent = h; hrow.appendChild(th);
+  });
+  const theadEl = thead; theadEl.appendChild(hrow);
+  const tbody = document.createElement('tbody');
+  for (const it of items) {
+    const stockVal = it.remaining * it.rate;
+    const tr = document.createElement('tr');
+    const cells = [it.code, it.name, it.base_unit, `${it.remaining} ${it.base_unit}`, rate(it.rate), peso(stockVal), it.low ? 'LOW' : ''];
+    cells.forEach((val, i) => {
+      const td = document.createElement('td');
+      if (i === 4 || i === 5) td.className = 'peso';
+      if (i === 6 && it.low) { td.className = 'neg'; td.textContent = 'LOW'; }
+      else td.textContent = String(val);
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  }
+  table.append(theadEl, tbody);
+  return table;
+}
+
 async function buildSite() {
   const stage = document.getElementById('stage');
 
@@ -368,6 +440,19 @@ async function renderPurchases() {
   }
   table.append(thead, tbody);
   sec.appendChild(table);
+
+  // §3 R3: aggregated inventory — ONE row per inventory_code (latest cost wins).
+  // The table above is the audit record (every purchase); this is the merged view.
+  const invItems = await inventoryRows();
+  if (invItems.length) {
+    const invWrap = document.createElement('div');
+    invWrap.className = 'card';
+    const invHead = document.createElement('div');
+    invHead.textContent = 'Inventory (one row per item — newest purchase sets ₱/OUM)';
+    invWrap.appendChild(invHead);
+    sec.appendChild(invWrap);
+    sec.appendChild(inventoryTable(invItems));
+  }
 
   // add-row form
   const form = document.createElement('div');
