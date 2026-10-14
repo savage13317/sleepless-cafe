@@ -5,11 +5,10 @@
 // ---- pages (order = PLAN.md build order) ----
 const PAGES = [
   { id: 'purchases',  title: 'Purchases',   sub: 'Materials, price, unit of measure → ₱ per base unit' },
-  { id: 'recipes',    title: 'Recipes',     sub: 'Drink = ingredient combo → one-cup cost' },
   { id: 'overhead',   title: 'Overhead',    sub: 'Indirect costs → ₱ per cup' },
+  { id: 'recipes',    title: 'Recipes',     sub: 'Drink = ingredient combo → one-cup cost' },
   { id: 'pricing',    title: 'Selling price', sub: 'Menu + margin per drink/size (staff reference)' },
   { id: 'daily-sales', title: 'Daily Sales', sub: 'End-of-day sales + wastage → revenue, COGS, net' },
-  { id: 'ordering',   title: 'Ordering',    sub: 'Daily sells → draw down stock' },
   { id: 'inventory',  title: 'Inventory',   sub: 'Remaining stock · reconcile · draw-down · history' },
 ];
 
@@ -279,7 +278,6 @@ async function buildSite() {
     else if (p.id === 'overhead') main.appendChild(await renderOverhead());
     else if (p.id === 'pricing') main.appendChild(await renderPricing());
     else if (p.id === 'daily-sales') main.appendChild(await renderDailySales());
-    else if (p.id === 'ordering') main.appendChild(await renderOrdering());
     else main.appendChild(section(p.id, p.title, p.sub));
   }
 
@@ -363,16 +361,14 @@ async function renderDashboard() {
   sec.id = 'dashboard';
   const t = document.createElement('div'); t.className = 'page-title'; t.textContent = 'Dashboard';
   const s = document.createElement('div'); s.className = 'page-sub';
-  s.textContent = 'Summary cards — live stock, low-stock alerts, quotes this month';
+  s.textContent = 'Summary cards — live stock, low-stock alerts, sales recorded this month';
   sec.append(t, s);
 
-  let purchases = [];
-  let orders = [];
-  let sold = {};
+  let invItems = [];
+  let sales = [];
   try {
-    purchases = await getData('purchases', 'order=created_at.desc&select=*');
-    sold = await soldByPurchase();
-    orders = await getData('orders', 'order=created_at.desc&select=*');
+    invItems = await inventoryRows();
+    sales = await getData('daily_sales', 'order=created_at.desc&select=*');
   } catch (e) {
     const err = document.createElement('div'); err.className = 'empty-note';
     err.textContent = 'Could not load dashboard data: ' + e.message;
@@ -380,19 +376,19 @@ async function renderDashboard() {
     return sec;
   }
 
+  // stock value + low-stock count from the SHARED aggregation (single source of truth)
   let stockValue = 0;
   let lowCount = 0;
-  for (const r of purchases) {
-    const oh = onHand(r, sold[String(r.id)] || 0);
-    stockValue += oh * pricePerBase(r);
-    if (oh < Number(r.low_at)) lowCount++;
+  for (const it of invItems) {
+    stockValue += it.remaining * it.rate;
+    if (it.low) lowCount++;
   }
 
-  // quotes this month = orders dated in the current YYYY-MM
+  // sales recorded this month = daily_sales dated in the current YYYY-MM
   const ym = new Date().toISOString().slice(0, 7);
-  let quotesThisMonth = 0;
-  for (const o of orders) {
-    if ((o.date || '').slice(0, 7) === ym) quotesThisMonth++;
+  let salesThisMonth = 0;
+  for (const ds of sales) {
+    if ((ds.date || '').slice(0, 7) === ym) salesThisMonth++;
   }
 
   const mkCard = (label, value, cls) => {
@@ -409,7 +405,7 @@ async function renderDashboard() {
 
   sec.appendChild(mkCard('Stock value', peso(Math.round(stockValue * 100) / 100), 'peso'));
   sec.appendChild(mkCard('Low-stock items', String(lowCount), lowCount > 0 ? 'neg' : 'num'));
-  sec.appendChild(mkCard('Quotes this month', String(quotesThisMonth), 'num'));
+  sec.appendChild(mkCard('Sales recorded this month', String(salesThisMonth), 'num'));
 
   return sec;
 }
@@ -1543,200 +1539,5 @@ async function renderDailySales() {
   return sec;
 }
 
-async function renderOrdering() {
-  const sec = document.createElement('section');
-  sec.id = 'ordering';
-  const t = document.createElement('div'); t.className = 'page-title'; t.textContent = 'Ordering';
-  const s = document.createElement('div'); s.className = 'page-sub';
-  s.textContent = 'Daily sells → draw down stock';
-  sec.append(t, s);
-
-  let purchases = [];
-  let recipes = [];
-  let pricing = [];
-  let orders = [];
-  try {
-    purchases = await getData('purchases', 'order=created_at.desc&select=*');
-    recipes = await getData('recipes', 'order=created_at.desc&select=*');
-    pricing = await getData('pricing', 'order=created_at.desc&select=*');
-    orders = await getData('orders', 'order=created_at.desc&select=*');
-  } catch (e) {
-    const err = document.createElement('div'); err.className = 'empty-note';
-    err.textContent = 'Could not load ordering data: ' + e.message;
-    sec.appendChild(err);
-    return sec;
-  }
-
-  // current sold per purchase (so on_hand shown here matches the other pages)
-  const recById = {};
-  for (const rc of recipes) recById[String(rc.id)] = rc;
-  const byId = {};
-  for (const p of purchases) byId[String(p.id)] = p;
-
-  function expandSold(lines) {
-    const sold = {};
-    for (const ln of lines) {
-      if (!ln) continue;
-      const rc = recById[String(ln.recipe_id)];
-      if (!rc) continue;
-      const qty = Number(ln.qty) || 0;
-      const ings = Array.isArray(rc.ingredients) ? rc.ingredients : [];
-      for (const ing of ings) {
-        if (!ing) continue;
-        const pid = String(ing.purchase_id);
-        sold[pid] = (sold[pid] || 0) + Number(ing.qty_base) * qty;
-      }
-    }
-    return sold;
-  }
-  function currentSold() {
-    const sold = {};
-    for (const o of orders) {
-      const part = expandSold(Array.isArray(o.lines) ? o.lines : []);
-      for (const k in part) sold[k] = (sold[k] || 0) + part[k];
-    }
-    return sold;
-  }
-  const soldNow = currentSold();
-
-  // latest sell price per drink·size (for running total)
-  const sellByKey = {};
-  for (const pr of pricing) {
-    const key = `${pr.drink_name}||${pr.size}`;
-    if (sellByKey[key] == null) sellByKey[key] = Number(pr.sell_price);
-  }
-  function sellPriceOf(rc) {
-    const key = `${rc.drink_name}||${rc.size}`;
-    return sellByKey[key];
-  }
-
-  // on_hand table (draw-down adjusted) so staff can see stock before ordering
-  const table = document.createElement('table');
-  const thead = document.createElement('thead');
-  const hrow = document.createElement('tr');
-  ['Name', 'Unit', 'On hand', 'Sold', 'Low?'].forEach(h => {
-    const th = document.createElement('th'); th.textContent = h; hrow.appendChild(th);
-  });
-  thead.appendChild(hrow);
-  const tbody = document.createElement('tbody');
-  for (const r of purchases) {
-    const sold = soldNow[String(r.id)] || 0;
-    const oh = onHand(r, sold);
-    const low = oh < Number(r.low_at);
-    const tr = document.createElement('tr');
-    const cells = [r.name, r.base_unit, `${oh} ${r.base_unit}`, `${sold} ${r.base_unit}`, low ? 'LOW' : ''];
-    cells.forEach((val, i) => {
-      const td = document.createElement('td');
-      if (i === 4 && low) { td.className = 'neg'; td.textContent = 'LOW'; }
-      else td.textContent = String(val);
-      tr.appendChild(td);
-    });
-    tbody.appendChild(tr);
-  }
-  table.append(thead, tbody);
-  sec.appendChild(table);
-
-  // order history (recent tickets)
-  if (orders.length) {
-    const hist = document.createElement('div');
-    hist.className = 'card';
-    const ht = document.createElement('div'); ht.textContent = 'Recent orders';
-    hist.appendChild(ht);
-    for (const o of orders.slice(0, 8)) {
-      const line = document.createElement('div');
-      const ls = Array.isArray(o.lines) ? o.lines : [];
-      const desc = ls.map(ln => {
-        const rc = recById[String(ln.recipe_id)];
-        const label = rc ? `${rc.drink_name} · ${rc.size}` : '?';
-        return `${label} × ${Number(ln.qty)}`;
-      }).join(' · ');
-      line.textContent = `id ${String(o.id).slice(0, 8)} — ${o.date || ''} — ${desc || '(no lines)'} — ${peso(o.running_total)}`;
-      hist.appendChild(line);
-    }
-    sec.appendChild(hist);
-  } else {
-    const note = document.createElement('div'); note.className = 'empty-note';
-    note.textContent = 'No orders yet — build a ticket below.';
-    sec.appendChild(note);
-  }
-
-  // ticket builder: up to 6 (recipe-id + qty) lines
-  const form = document.createElement('div');
-  form.className = 'card';
-  const N_LINES = 6;
-  const lineInputs = [];
-  for (let i = 0; i < N_LINES; i++) {
-    const idInp = document.createElement('input');
-    idInp.className = 'field'; idInp.setAttribute('placeholder', `Line ${i + 1}: recipe id (copy from Recipes)`);
-    idInp.setAttribute('aria-label', `Line ${i + 1} recipe id`);
-    const qtyInp = document.createElement('input');
-    qtyInp.className = 'field'; qtyInp.type = 'number';
-    qtyInp.setAttribute('placeholder', `qty ${i + 1}`);
-    qtyInp.setAttribute('aria-label', `Line ${i + 1} quantity`);
-    form.append(idInp, qtyInp);
-    lineInputs.push([idInp, qtyInp]);
-  }
-  const submitBtn = document.createElement('button');
-  submitBtn.className = 'btn-submit'; submitBtn.textContent = 'Submit order';
-  form.appendChild(submitBtn);
-  sec.appendChild(form);
-
-  submitBtn.addEventListener('click', () => {
-    // gather lines
-    const lines = [];
-    for (const [idInp, qtyInp] of lineInputs) {
-      const idKey = idInp.value.trim();
-      const qtyStr = qtyInp.value.trim();
-      if (idKey === '' && qtyStr === '') continue;
-      const rc = recipes.find(r => String(r.id) === idKey || String(r.id).startsWith(idKey));
-      if (!rc || qtyStr === '' || !(Number(qtyStr) > 0)) {
-        const w = document.createElement('div'); w.className = 'neg';
-        w.textContent = 'Each line needs a valid recipe id and a positive qty.';
-        form.appendChild(w); return;
-      }
-      lines.push({ recipe_id: rc.id, size: rc.size, qty: Number(qtyStr) });
-    }
-    if (!lines.length) {
-      const w = document.createElement('div'); w.className = 'neg';
-      w.textContent = 'Add at least one line.';
-      form.appendChild(w); return;
-    }
-
-    // running total from pricing (missing sell price -> 0 contribution)
-    let runningTotal = 0;
-    for (const ln of lines) {
-      const rc = recById[String(ln.recipe_id)];
-      const sp = rc ? sellPriceOf(rc) : null;
-      if (sp != null) runningTotal += sp * ln.qty;
-    }
-
-    // draw-down check: expand this ticket's lines into ingredient base-units
-    const need = expandSold(lines);
-    const shortages = [];
-    for (const pid in need) {
-      const p = byId[pid];
-      if (!p) continue;
-      const oh = onHand(p, soldNow[pid] || 0);
-      if (need[pid] > oh) {
-        shortages.push(`${p.name}: need ${need[pid]} ${p.base_unit}, only ${oh} ${p.base_unit} on hand`);
-      }
-    }
-    if (shortages.length) {
-      const w = document.createElement('div'); w.className = 'neg';
-      w.textContent = 'OUT OF STOCK — order blocked: ' + shortages.join('; ');
-      form.appendChild(w); return;
-    }
-
-    const body = {
-      date: new Date().toISOString().slice(0, 10),
-      time: new Date().toTimeString().slice(0, 8),
-      lines,
-      running_total: Math.round(runningTotal * 100) / 100,
-    };
-    postData('orders', body).then(() => location.reload());
-  });
-
-  addDeleteCard(sec, orders, 'orders', 'Order id (copy from a ticket)');
-  addPrintButton(sec, 'Print order ticket');
-  return sec;
-}
+// ---- R10: Ordering page RETIRED (replaced by Module 5 Daily Sales + Module 6 Inventory) ----
+// soldByPurchase() already reads daily_sales (R8); nothing else reads the `orders` table.

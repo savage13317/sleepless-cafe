@@ -7,7 +7,7 @@ Same discipline as before: every phase ends with a checkpoint that must pass bef
 **Baseline at time of writing:** `origin/main` = `7c4bdc6`; `app.js` has an **uncommitted local edit**
 (restock card removed, never pushed). `MODULE1-webpage1.md` untracked. Fix this in R0 before anything else.
 
-**Status tracker:** R0 ✅ · R1 ✅ · R2 ✅ · R3 ✅ · R4 ✅ · R5 ✅ · R6 ✅ · R7 ✅ (verified, no code change — already wired by R5+R6) · R8 ✅ · R9 ✅ (next commit — verified: Coffee SC0003 actual 1700 → variance −100, impact −₱50.00 LOST, footer Total lost ₱50.00 / savings ₱0.00 / Net ₱-50.00, §1 stock table remaining 1700 g; M1 §3 stock value card followed ₱985.00→₱935.00 via shared inventoryRows()) · R10 ⏳ next · R11–R12 ⬜ pending.
+**Status tracker:** R0 ✅ · R1 ✅ · R2 ✅ · R3 ✅ · R4 ✅ · R5 ✅ · R6 ✅ · R7 ✅ (verified, no code change — already wired by R5+R6) · R8 ✅ · R9 ✅ (5c768f1 — verified: Coffee SC0003 actual 1700 → variance −100, impact −₱50.00 LOST, footer Total lost ₱50.00 / savings ₱0.00 / Net ₱-50.00, §1 stock table remaining 1700 g; M1 §3 stock value card followed ₱985.00→₱935.00 via shared inventoryRows()) · R10 ⏳ next · R11–R12 ⬜ pending.
 Live state after R3: `purchases` = 3 seed rows (SC0001/2/3), `settings.next_inventory_seq` = 5,
 `target_daily_cups` = 100, `daily_sales` empty. R3 checkpoint note: plan text says "₱0.052" but
 ₱52 ÷ (2×250 ml = 500 ml) is genuinely **₱0.104/ml** — arithmetic slip in the plan; the logic
