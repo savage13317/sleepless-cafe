@@ -919,35 +919,6 @@ async function renderPurchases() {
     }
   });
 
-  // Delete purchases by Inventory ID (the audit table no longer shows UUIDs, so
-  // the visible Inventory ID is the handle). Deletes every purchase row of that item.
-  const delCard = document.createElement('div');
-  delCard.className = 'card';
-  const delHead = document.createElement('div');
-  delHead.textContent = 'Delete ALL purchases of an item (by Inventory ID)';
-  const delInp = document.createElement('input');
-  delInp.className = 'field';
-  delInp.setAttribute('placeholder', 'Inventory ID (SC…)');
-  delInp.setAttribute('aria-label', 'Inventory ID to delete');
-  const delBtn = document.createElement('button');
-  delBtn.className = 'btn-delete';
-  delBtn.textContent = 'Delete';
-  delCard.append(delHead, delInp, delBtn);
-  sec.appendChild(delCard);
-  delBtn.addEventListener('click', () => {
-    const code = delInp.value.trim().toUpperCase();
-    if (!code) {
-      const w = document.createElement('div'); w.className = 'neg';
-      w.textContent = 'Enter an Inventory ID to delete.';
-      delCard.appendChild(w); return;
-    }
-    if (!rows.some(r => String(r.inventory_code || '').trim().toUpperCase() === code)) {
-      const w = document.createElement('div'); w.className = 'neg';
-      w.textContent = 'No purchases use that Inventory ID.';
-      delCard.appendChild(w); return;
-    }
-    deleteData('purchases', `inventory_code=eq.${encodeURIComponent(code)}`).then(() => location.reload());
-  });
   return sec;
 }
 
