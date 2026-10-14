@@ -205,10 +205,8 @@ async function inventoryRows() {
       if (String(r.created_at || '') > String(newest.created_at || '')) newest = r;
     }
     let totalOum = 0;
-    let totalCost = 0;
     for (const r of g.rows) {
       totalOum += Number(r.qty_packs) * Number(r.pack_size);
-      totalCost += Number(r.cost_price);
     }
     const soldForItem = Number(sold[code] || 0); // sold map is keyed by inventory_code (R6)
     const recorded = totalOum - soldForItem;
@@ -218,7 +216,7 @@ async function inventoryRows() {
     const lowAt = Number(newest.low_at);
     items.push({
       code, name: newest.name, base_unit: newest.base_unit,
-      totalOum, totalCost, recorded, actual, remaining, rate, lowAt, low: remaining < lowAt,
+      totalOum, recorded, actual, remaining, rate, lowAt, low: remaining < lowAt,
       newest, rowCount: g.rows.length,
     });
   }
@@ -231,7 +229,7 @@ function inventoryTable(items) {
   const table = document.createElement('table');
   const thead = document.createElement('thead');
   const hrow = document.createElement('tr');
-  ['Inventory ID', 'Item', 'UOM', 'Remaining', '₱ / OUM', 'Stock value ₱', 'Total cost ₱', 'Low?'].forEach(h => {
+  ['Inventory ID', 'Item', 'UOM', 'Remaining', '₱ / OUM', 'Stock value ₱', 'Low?'].forEach(h => {
     const th = document.createElement('th'); th.textContent = h; hrow.appendChild(th);
   });
   const theadEl = thead; theadEl.appendChild(hrow);
@@ -239,11 +237,11 @@ function inventoryTable(items) {
   for (const it of items) {
     const stockVal = it.remaining * it.rate;
     const tr = document.createElement('tr');
-    const cells = [it.code, it.name, it.base_unit, `${it.remaining} ${it.base_unit}`, rate(it.rate), peso(stockVal), peso(it.totalCost), it.low ? 'LOW' : ''];
+    const cells = [it.code, it.name, it.base_unit, `${it.remaining} ${it.base_unit}`, rate(it.rate), peso(stockVal), it.low ? 'LOW' : ''];
     cells.forEach((val, i) => {
       const td = document.createElement('td');
-      if (i === 4 || i === 5 || i === 6) td.className = 'peso';
-      if (i === 7 && it.low) { td.className = 'neg'; td.textContent = 'LOW'; }
+      if (i === 4 || i === 5) td.className = 'peso';
+      if (i === 6 && it.low) { td.className = 'neg'; td.textContent = 'LOW'; }
       else td.textContent = String(val);
       tr.appendChild(td);
     });
