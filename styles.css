@@ -88,6 +88,17 @@ select.field option { background: var(--bg-raised); color: var(--ink); }
 .table-wrap { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 0 16px; }
 .table-wrap > table { width: 100%; }
 
+/* ---- R17: table title (caption) + vertical-scroll container ---- */
+caption.tbl-caption {
+  caption-side: top; text-align: left;
+  color: var(--ink-dim); font-size: .9rem; padding: 4px 8px;
+}
+.scroll-y {
+  display: block; max-height: 260px; overflow-y: auto; overflow-x: auto;
+  -webkit-overflow-scrolling: touch; margin: 0 0 16px;
+}
+.scroll-y > table { width: 100%; }
+
 /* ---- Phase 9: print / export buttons ---- */
 .btn-print {
   display: inline-block; cursor: pointer;

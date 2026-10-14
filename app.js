@@ -225,8 +225,14 @@ async function inventoryRows() {
 }
 
 // Render the aggregated inventory table (shared: M1 §3 compact + M6 §1 full).
-function inventoryTable(items) {
+function inventoryTable(items, title = 'Inventory') {
   const table = document.createElement('table');
+  if (title) {
+    const cap = document.createElement('caption');
+    cap.className = 'tbl-caption';
+    cap.textContent = title;
+    table.appendChild(cap);
+  }
   const thead = document.createElement('thead');
   const hrow = document.createElement('tr');
   ['Inventory ID', 'Item', 'UOM', 'Remaining', '₱ / OUM', 'Stock value ₱', 'Low?'].forEach(h => {
@@ -287,10 +293,22 @@ async function buildSite() {
     showModule(id, main, nav, a);
   });
 
-  await showModule('dashboard', main, nav, dash);
+  // R17: after an add/edit the page reloads — restore the SAME module the user
+  // was on (stored in sessionStorage) instead of always returning to Dashboard.
+  const startId = sessionStorage.getItem('slc_view') || 'dashboard';
+  let startA = dash;
+  if (startId !== 'dashboard') {
+    for (const a of nav.querySelectorAll('a')) {
+      if (a.getAttribute('href').slice(1) === startId) { startA = a; break; }
+    }
+  }
+  await showModule(startId, main, nav, startA);
 }
 
 async function showModule(id, main, nav, activeA) {
+  // R17: remember which module is active so a reload (after add/edit) returns
+  // here instead of always snapping back to the Dashboard.
+  sessionStorage.setItem('slc_view', id);
   let sec = null;
   try {
     if (id === 'dashboard') sec = await renderDashboard();
@@ -510,11 +528,16 @@ async function renderPurchases() {
   }
   sec.appendChild(lowCard);
 
-  // table
+  // audit table — every purchase, newest first. Title + date column; the
+  // container shows ~5 recent rows and scrolls vertically for older history.
   const table = document.createElement('table');
+  const cap = document.createElement('caption');
+  cap.className = 'tbl-caption';
+  cap.textContent = 'Purchase history — most recent first (scroll for older)';
+  table.appendChild(cap);
   const thead = document.createElement('thead');
   const hrow = document.createElement('tr');
-  ['Inv ID', 'Item / Ingredient', 'Unit', 'Total UOM', '₱ / pack', 'Total price', '₱ / base', 'On hand', 'Low?'].forEach(h => {
+  ['Date', 'Inv ID', 'Item / Ingredient', 'Unit', 'Total UOM', '₱ / pack', 'Total price', '₱ / base', 'On hand', 'Low?'].forEach(h => {
     const th = document.createElement('th'); th.textContent = h; hrow.appendChild(th);
   });
   thead.appendChild(hrow);
@@ -525,23 +548,27 @@ async function renderPurchases() {
     const packs = Number(r.qty_packs);
     const perPack = packs > 0 ? Number(r.cost_price) / packs : Number(r.cost_price);
     const totalUom = packs * Number(r.pack_size);
+    const dateStr = r.date || (r.created_at ? String(r.created_at).slice(0, 10) : '—');
     const tr = document.createElement('tr');
     const cells = [
-      r.inventory_code || '—', r.name, r.base_unit,
+      dateStr, r.inventory_code || '—', r.name, r.base_unit,
       `${totalUom} ${r.base_unit}`, peso(perPack), peso(r.cost_price), rate(pricePerBase(r)),
       `${oh} ${r.base_unit}`, low ? 'LOW' : '',
     ];
     cells.forEach((val, i) => {
       const td = document.createElement('td');
-      if (i === 4 || i === 5 || i === 6) td.className = 'peso';
-      if (i === 8 && low) { td.className = 'neg'; td.textContent = 'LOW'; }
+      if (i === 5 || i === 6 || i === 7) td.className = 'peso';
+      if (i === 9 && low) { td.className = 'neg'; td.textContent = 'LOW'; }
       else td.textContent = String(val);
       tr.appendChild(td);
     });
     tbody.appendChild(tr);
   }
   table.append(thead, tbody);
-  sec.appendChild(table);
+  const scrollWrap = document.createElement('div');
+  scrollWrap.className = 'scroll-y';
+  scrollWrap.appendChild(table);
+  sec.appendChild(scrollWrap);
 
   // §3 R3: aggregated inventory — ONE row per inventory_code (latest cost wins).
   // The table above is the audit record (every purchase); this is the merged view.
@@ -807,7 +834,7 @@ async function renderInventory() {
   const stockWrap = document.createElement('div'); stockWrap.className = 'card';
   const stockH = document.createElement('div'); stockH.textContent = 'Stock on hand (one row per item — newest purchase sets ₱/OUM)';
   stockWrap.appendChild(stockH);
-  stockWrap.appendChild(inventoryTable(invItems));
+  stockWrap.appendChild(inventoryTable(invItems, 'Stock on hand'));
   sec.appendChild(stockWrap);
 
   // ---- §2 reconcile: record vs actual ----
