@@ -10,7 +10,7 @@ const PAGES = [
   { id: 'pricing',    title: 'Selling price', sub: 'Menu + margin per drink/size (staff reference)' },
   { id: 'daily-sales', title: 'Daily Sales', sub: 'End-of-day sales + wastage → revenue, COGS, net' },
   { id: 'ordering',   title: 'Ordering',    sub: 'Daily sells → draw down stock' },
-  { id: 'stocktake',  title: 'Stock-take',  sub: 'Reconcile record vs actual → lost cost / savings' },
+  { id: 'inventory',  title: 'Inventory',   sub: 'Remaining stock · reconcile · draw-down · history' },
 ];
 
 // ---- gate ----
@@ -174,10 +174,23 @@ async function nextInventoryCode() {
 async function inventoryRows() {
   let purchases = [];
   let sold = {};
+  let stocktakes = [];
   try {
     purchases = await getData('purchases', 'order=created_at.asc&select=*');
     sold = await soldByPurchase();
+    stocktakes = await getData('stocktakes', 'order=created_at.desc&select=*');
   } catch (e) { return []; }
+  // R9: latest physical count per inventory_code (newest stocktake wins). A saved
+  // reconcile SETS remaining = actual — the physical count corrects the record.
+  const latestActual = {};
+  for (const st of stocktakes) {
+    if (!Array.isArray(st.lines)) continue;
+    for (const ln of st.lines) {
+      if (!ln) continue;
+      const c = String(ln.inventory_code || '').trim().toUpperCase();
+      if (c && latestActual[c] == null) latestActual[c] = Number(ln.actual_oum);
+    }
+  }
   const byCode = {};
   for (const r of purchases) {
     const code = String(r.inventory_code || '').trim().toUpperCase();
@@ -197,12 +210,14 @@ async function inventoryRows() {
       totalOum += Number(r.qty_packs) * Number(r.pack_size);
     }
     const soldForItem = Number(sold[code] || 0); // sold map is keyed by inventory_code (R6)
-    const remaining = totalOum - soldForItem;
+    const recorded = totalOum - soldForItem;
+    const actual = latestActual[code];
+    const remaining = (actual != null) ? actual : recorded; // reconcile sets remaining = actual
     const rate = pricePerBase(newest); // latest purchase wins
     const lowAt = Number(newest.low_at);
     items.push({
       code, name: newest.name, base_unit: newest.base_unit,
-      totalOum, remaining, rate, lowAt, low: remaining < lowAt,
+      totalOum, recorded, actual, remaining, rate, lowAt, low: remaining < lowAt,
       newest, rowCount: g.rows.length,
     });
   }
@@ -259,7 +274,7 @@ async function buildSite() {
   main.appendChild(await renderDashboard());
   for (const p of PAGES) {
     if (p.id === 'purchases') main.appendChild(await renderPurchases());
-    else if (p.id === 'stocktake') main.appendChild(await renderStocktake());
+    else if (p.id === 'inventory') main.appendChild(await renderInventory());
     else if (p.id === 'recipes') main.appendChild(await renderRecipes());
     else if (p.id === 'overhead') main.appendChild(await renderOverhead());
     else if (p.id === 'pricing') main.appendChild(await renderPricing());
@@ -606,90 +621,93 @@ async function renderPurchases() {
 // variance < 0 -> LOST cost (amber/red); variance > 0 -> SAVINGS (green).
 // Saving a count appends a stocktakes row; the latest count per item
 // self-corrects the record (on_hand shown = latest actual when one exists).
-async function renderStocktake() {
+// ---- R9: Module 6 — Inventory (authoritative full view) ----
+// §1 stock table = the SHARED inventoryTable() (single source of truth with M1 §3).
+// §2 reconcile: actual OUM -> variance = actual - recorded, impact = |variance| x rate.
+// §3 draw-down log: what sold/wasted on the latest recorded day.
+// §4 history: past stock-takes + past daily-sales records.
+async function renderInventory() {
   const sec = document.createElement('section');
-  sec.id = 'stocktake';
-  const t = document.createElement('div'); t.className = 'page-title'; t.textContent = 'Stock-take';
+  sec.id = 'inventory';
+  const t = document.createElement('div'); t.className = 'page-title'; t.textContent = 'Inventory';
   const s = document.createElement('div'); s.className = 'page-sub';
-  s.textContent = 'Reconcile record vs actual → lost cost / savings';
+  s.textContent = 'Remaining stock · reconcile record vs actual · draw-down · history';
   sec.append(t, s);
 
-  let purchases = [];
-  let history = [];
-  let sold = {};
+  let invItems = [];
+  let stocktakes = [];
+  let sales = [];
+  let recipes = [];
   try {
-    purchases = await getData('purchases', 'order=created_at.desc&select=*');
-    history = await getData('stocktakes', 'order=created_at.desc&select=*');
-    sold = await soldByPurchase();
+    invItems = await inventoryRows();
+    stocktakes = await getData('stocktakes', 'order=created_at.desc&select=*');
+    sales = await getData('daily_sales', 'order=created_at.desc&select=*');
+    recipes = await getData('recipes', 'order=created_at.desc&select=*');
   } catch (e) {
     const err = document.createElement('div'); err.className = 'empty-note';
-    err.textContent = 'Could not load stock data: ' + e.message;
+    err.textContent = 'Could not load inventory data: ' + e.message;
     sec.appendChild(err);
     return sec;
   }
+  const nameByCode = {};
+  const unitByCode = {};
+  const rateByCode = {};
+  for (const it of invItems) { nameByCode[it.code] = it.name; unitByCode[it.code] = it.base_unit; rateByCode[it.code] = it.rate; }
 
-  // latest recorded actual per purchase_id (history is newest-first)
-  const latestActual = {};
-  for (const st of history) {
-    if (!Array.isArray(st.lines)) continue;
-    for (const ln of st.lines) {
-      if (ln && ln.purchase_id && latestActual[ln.purchase_id] == null) {
-        latestActual[ln.purchase_id] = Number(ln.actual_base);
-      }
-    }
-  }
+  // ---- §1 stock table (shared single source of truth) ----
+  const stockWrap = document.createElement('div'); stockWrap.className = 'card';
+  const stockH = document.createElement('div'); stockH.textContent = 'Stock on hand (one row per item — newest purchase sets ₱/OUM)';
+  stockWrap.appendChild(stockH);
+  stockWrap.appendChild(inventoryTable(invItems));
+  sec.appendChild(stockWrap);
 
-  const table = document.createElement('table');
-  const thead = document.createElement('thead');
-  const hrow = document.createElement('tr');
-  ['Name', 'Unit', 'Record on hand', 'Actual (latest)', 'Variance', 'Impact', 'Status'].forEach(h => {
-    const th = document.createElement('th'); th.textContent = h; hrow.appendChild(th);
+  // ---- §2 reconcile: record vs actual ----
+  const recWrap = document.createElement('div'); recWrap.className = 'card';
+  const recH = document.createElement('div'); recH.textContent = 'Reconcile — enter actual count in OUM (saving sets remaining = actual)';
+  recWrap.appendChild(recH);
+  const rtable = document.createElement('table');
+  const rhead = document.createElement('thead');
+  const rhrow = document.createElement('tr');
+  ['Inventory ID', 'Item', 'UOM', 'Recorded', 'Actual', 'Variance', 'Impact', 'Status'].forEach(h => {
+    const th = document.createElement('th'); th.textContent = h; rhrow.appendChild(th);
   });
-  thead.appendChild(hrow);
-  const tbody = document.createElement('tbody');
-
+  rhead.appendChild(rhrow);
+  const rbody = document.createElement('tbody');
   let totalLost = 0, totalSavings = 0;
-  for (const r of purchases) {
-    const oh = onHand(r, sold[String(r.id)] || 0);
-    const ppb = pricePerBase(r);
-    const actual = latestActual[r.id];
-    const variance = (actual == null) ? 0 : actual - oh;
-    const impact = Math.abs(variance) * ppb;
+  for (const it of invItems) {
+    const actual = it.actual;
+    const variance = (actual == null) ? 0 : actual - it.recorded;
+    const impact = Math.abs(variance) * it.rate;
     if (variance < 0) totalLost += impact;
     else if (variance > 0) totalSavings += impact;
-
-    const status = variance < 0 ? 'LOST' : variance > 0 ? 'SAVINGS' : 'match';
+    const status = variance < 0 ? 'LOST' : variance > 0 ? 'SAVINGS' : (actual == null ? '—' : 'match');
     const tr = document.createElement('tr');
-    const cells = [
-      r.name, r.base_unit, `${oh} ${r.base_unit}`,
-      actual == null ? '—' : `${actual} ${r.base_unit}`,
-      variance === 0 ? '0' : (variance > 0 ? '+' : '') + variance,
+    const cells = [it.code, it.name, it.base_unit,
+      `${it.recorded} ${it.base_unit}`,
+      actual == null ? '—' : `${actual} ${it.base_unit}`,
+      variance === 0 ? (actual == null ? '—' : '0') : (variance > 0 ? '+' : '') + variance,
       impact === 0 ? '—' : peso(Math.round(impact * 100) / 100),
-      status,
-    ];
+      status];
     cells.forEach((val, i) => {
       const td = document.createElement('td');
-      if (i === 5 && impact !== 0) {
+      if (i === 5 && variance !== 0) {
         td.className = variance < 0 ? 'neg' : 'pos';
         td.textContent = (variance < 0 ? '-' : '+') + String(val);
-      } else if (i === 6) {
-        td.className = variance < 0 ? 'neg' : variance > 0 ? 'pos' : 'num';
-        td.textContent = String(val);
-      } else if (i === 4 && variance !== 0) {
+      } else if (i === 6 && impact !== 0) {
         td.className = variance < 0 ? 'neg' : 'pos';
+        td.textContent = (variance < 0 ? '-' : '+') + String(val);
+      } else if (i === 7) {
+        td.className = variance < 0 ? 'neg' : variance > 0 ? 'pos' : 'num';
         td.textContent = String(val);
       } else {
         td.textContent = String(val);
       }
       tr.appendChild(td);
     });
-    tbody.appendChild(tr);
+    rbody.appendChild(tr);
   }
-  table.append(thead, tbody);
-  sec.appendChild(table);
-
-  const foot = document.createElement('div');
-  foot.className = 'card';
+  rtable.append(rhead, rbody);
+  recWrap.appendChild(rtable);
   const net = totalSavings - totalLost;
   const mk = (label, val, cls) => {
     const row = document.createElement('div');
@@ -697,20 +715,22 @@ async function renderStocktake() {
     row.textContent = `${label} ${peso(Math.round(val * 100) / 100)}`;
     return row;
   };
+  const foot = document.createElement('div'); foot.className = 'card';
   foot.appendChild(mk('Total lost', totalLost, 'neg'));
   foot.appendChild(mk('Total savings', totalSavings, 'pos'));
   foot.appendChild(mk('Net', net, net < 0 ? 'neg' : 'pos'));
   sec.appendChild(foot);
 
+  // reconcile form: Inventory ID (SC...) + actual OUM + date + counter
   const form = document.createElement('div');
   form.className = 'card';
-  const itemInp = document.createElement('input');
-  itemInp.className = 'field'; itemInp.setAttribute('placeholder', 'Item id (copy from a row)');
-  itemInp.setAttribute('aria-label', 'Item id');
+  const codeInp = document.createElement('input');
+  codeInp.className = 'field'; codeInp.setAttribute('placeholder', 'Inventory ID (SC…)');
+  codeInp.setAttribute('aria-label', 'Inventory ID');
   const actualInp = document.createElement('input');
   actualInp.className = 'field'; actualInp.type = 'number';
-  actualInp.setAttribute('placeholder', 'Actual count (base unit)');
-  actualInp.setAttribute('aria-label', 'Actual count in base unit');
+  actualInp.setAttribute('placeholder', 'Actual count in OUM');
+  actualInp.setAttribute('aria-label', 'Actual count in OUM');
   const dateInp = document.createElement('input');
   dateInp.className = 'field'; dateInp.setAttribute('placeholder', 'Date (YYYY-MM-DD)');
   dateInp.setAttribute('aria-label', 'Date');
@@ -718,29 +738,27 @@ async function renderStocktake() {
   counterInp.className = 'field'; counterInp.setAttribute('placeholder', 'Counter initials');
   counterInp.setAttribute('aria-label', 'Counter initials');
   const recBtn = document.createElement('button');
-  recBtn.className = 'btn-record'; recBtn.textContent = 'Record stock-take';
-  form.append(itemInp, actualInp, dateInp, counterInp, recBtn);
+  recBtn.className = 'btn-record'; recBtn.textContent = 'Record reconcile';
+  form.append(codeInp, actualInp, dateInp, counterInp, recBtn);
   sec.appendChild(form);
 
   recBtn.addEventListener('click', () => {
-    const idKey = itemInp.value.trim();
-    const actual = actualInp.value.trim();
-    if (!idKey || actual === '') {
+    const codeKey = codeInp.value.trim().toUpperCase();
+    const actualRaw = actualInp.value.trim();
+    if (!codeKey || actualRaw === '') {
       const w = document.createElement('div'); w.className = 'neg';
       w.textContent = 'Pick an item and enter its actual count.';
       form.appendChild(w); return;
     }
-    const row = purchases.find(r => String(r.id) === idKey || String(r.id).startsWith(idKey));
-    if (!row) {
+    const it = invItems.find(x => x.code === codeKey || x.code.startsWith(codeKey));
+    if (!it) {
       const w = document.createElement('div'); w.className = 'neg';
-      w.textContent = 'No such item.'; form.appendChild(w); return;
+      w.textContent = 'No such inventory ID.'; form.appendChild(w); return;
     }
-    const oh = onHand(row, sold[String(row.id)] || 0);
-    const ppb = pricePerBase(row);
-    const act = Number(actual);
-    const variance = act - oh;
-    const impact = Math.abs(variance) * ppb;
-    const line = { purchase_id: row.id, actual_base: act, variance, impact };
+    const act = Number(actualRaw);
+    const variance = act - it.recorded;
+    const impact = Math.abs(variance) * it.rate;
+    const line = { inventory_code: it.code, actual_oum: act, variance, impact };
     const lost = variance < 0 ? impact : 0;
     const savings = variance > 0 ? impact : 0;
     const body = {
@@ -752,43 +770,119 @@ async function renderStocktake() {
     postData('stocktakes', body).then(() => location.reload());
   });
 
-  if (history.length) {
-    const hist = document.createElement('div');
-    hist.className = 'card';
-    const ht = document.createElement('div'); ht.textContent = 'Past stock-takes';
-    hist.appendChild(ht);
-    const htable = document.createElement('table');
-    const hh = document.createElement('tr');
-    ['id', 'Date', 'Counter', 'Items', 'Lost', 'Savings', 'Net'].forEach(x => {
-      const th = document.createElement('th'); th.textContent = x; hh.appendChild(th);
+  // ---- §3 draw-down log: what sold/wasted on the latest recorded day ----
+  const drawWrap = document.createElement('div'); drawWrap.className = 'card';
+  const drawH = document.createElement('div'); drawH.textContent = 'Draw-down log — latest recorded day';
+  drawWrap.appendChild(drawH);
+  if (sales.length) {
+    const ds = sales[0];
+    const recById = {};
+    for (const rc of recipes) recById[String(rc.id)] = rc;
+    const consumed = {}; // code -> {oum, sold, wasted}
+    const lines = Array.isArray(ds.lines) ? ds.lines : [];
+    for (const ln of lines) {
+      if (!ln) continue;
+      const rc = recById[String(ln.recipe_id)];
+      if (!rc) continue;
+      const qty = Number(ln.qty) || 0;
+      const ings = Array.isArray(rc.ingredients) ? rc.ingredients : [];
+      for (const ing of ings) {
+        if (!ing) continue;
+        const c = String(ing.inventory_code || '').trim().toUpperCase();
+        if (!c) continue;
+        const bucket = consumed[c] || (consumed[c] = { sold: 0, wasted: 0 });
+        bucket.sold += Number(ing.qty_oum) * qty;
+      }
+    }
+    const wast = Array.isArray(ds.wastage) ? ds.wastage : [];
+    for (const w of wast) {
+      if (!w) continue;
+      const c = String(w.inventory_code || '').trim().toUpperCase();
+      if (!c) continue;
+      const bucket = consumed[c] || (consumed[c] = { sold: 0, wasted: 0 });
+      bucket.wasted += Number(w.qty_oum) || 0;
+    }
+    const dtable = document.createElement('table');
+    const dhead = document.createElement('thead');
+    const dhrow = document.createElement('tr');
+    ['Inventory ID', 'Item', 'UOM', 'Sold', 'Wasted', 'Total consumed'].forEach(h => {
+      const th = document.createElement('th'); th.textContent = h; dhrow.appendChild(th);
     });
-    const hhead = document.createElement('thead'); hhead.appendChild(hh);
-    const hbody = document.createElement('tbody');
-    for (const st of history) {
-      const tt = st.totals || {};
+    dhead.appendChild(dhrow);
+    const dbody = document.createElement('tbody');
+    for (const c in consumed) {
+      const bucket = consumed[c];
+      const total = bucket.sold + bucket.wasted;
       const tr = document.createElement('tr');
-      const nLines = Array.isArray(st.lines) ? st.lines.length : 0;
-      const cells = [String(st.id).slice(0, 8), st.date || '', st.counter || '—', String(nLines),
-        peso(tt.lost || 0), peso(tt.savings || 0), peso(tt.net || 0)];
+      const u = unitByCode[c] || '';
+      const cells = [c, nameByCode[c] || c, u, `${bucket.sold} ${u}`, `${bucket.wasted} ${u}`, `${total} ${u}`];
       cells.forEach((val, i) => {
         const td = document.createElement('td');
-        if (i >= 4) td.className = 'peso';
+        if (i === 5) td.className = 'num';
         td.textContent = String(val);
         tr.appendChild(td);
       });
-      hbody.appendChild(tr);
+      dbody.appendChild(tr);
     }
-    htable.append(hhead, hbody);
-    hist.appendChild(htable);
-    sec.appendChild(hist);
+    dtable.append(dhead, dbody);
+    drawWrap.appendChild(dtable);
+    const dsT = ds.totals || {};
+    const dsNote = document.createElement('div'); dsNote.className = 'num';
+    dsNote.textContent = `${ds.date || ''} — Rev ${peso(dsT.revenue || 0)} · COGS ${peso(dsT.cogs || 0)} · Wastage ${peso(dsT.wastage || 0)} · Net ${peso(dsT.net || 0)}`;
+    drawWrap.appendChild(dsNote);
   } else {
     const note = document.createElement('div'); note.className = 'empty-note';
-    note.textContent = 'No stock-takes recorded yet.';
-    sec.appendChild(note);
+    note.textContent = 'No daily-sales records yet — nothing drawn down.';
+    drawWrap.appendChild(note);
   }
+  sec.appendChild(drawWrap);
 
-  addDeleteCard(sec, history, 'stocktakes', 'Stock-take id (copy from history)');
-  addPrintButton(sec, 'Print stock-take sheet');
+  // ---- §4 history: past stock-takes + past daily-sales records ----
+  const histWrap = document.createElement('div'); histWrap.className = 'card';
+  const histH = document.createElement('div'); histH.textContent = 'History — stock-takes + daily-sales records';
+  histWrap.appendChild(histH);
+  const htable = document.createElement('table');
+  const hh = document.createElement('tr');
+  ['id', 'Type', 'Date', 'Who', 'Detail'].forEach(x => {
+    const th = document.createElement('th'); th.textContent = x; hh.appendChild(th);
+  });
+  const hhead = document.createElement('thead'); hhead.appendChild(hh);
+  const hbody = document.createElement('tbody');
+  const rows = [];
+  for (const st of stocktakes) {
+    const tt = st.totals || {};
+    rows.push({ id: String(st.id).slice(0, 8), type: 'stock-take', date: st.date || '', who: st.counter || '—',
+      detail: `lost ${peso(tt.lost || 0)} · savings ${peso(tt.savings || 0)} · net ${peso(tt.net || 0)}` });
+  }
+  for (const ds of sales) {
+    const tt = ds.totals || {};
+    rows.push({ id: String(ds.id).slice(0, 8), type: 'daily-sales', date: ds.date || '', who: ds.recorder || '—',
+      detail: `rev ${peso(tt.revenue || 0)} · cogs ${peso(tt.cogs || 0)} · net ${peso(tt.net || 0)}` });
+  }
+  rows.sort((a, b) => (String(b.date) < String(a.date) ? -1 : String(b.date) > String(a.date) ? 1 : 0));
+  for (const rw of rows) {
+    const tr = document.createElement('tr');
+    const cells = [rw.id, rw.type, rw.date, rw.who, rw.detail];
+    cells.forEach((val, i) => {
+      const td = document.createElement('td');
+      if (i === 1) td.className = 'num';
+      td.textContent = String(val);
+      tr.appendChild(td);
+    });
+    hbody.appendChild(tr);
+  }
+  if (rows.length) {
+    htable.append(hhead, hbody);
+    histWrap.appendChild(htable);
+  } else {
+    const note = document.createElement('div'); note.className = 'empty-note';
+    note.textContent = 'No stock-takes or daily-sales recorded yet.';
+    histWrap.appendChild(note);
+  }
+  sec.appendChild(histWrap);
+
+  addDeleteCard(sec, stocktakes, 'stocktakes', 'Stock-take id (copy from history)');
+  addPrintButton(sec, 'Print inventory sheet');
   return sec;
 }
 
