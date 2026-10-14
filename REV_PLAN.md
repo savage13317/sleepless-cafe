@@ -7,6 +7,12 @@ Same discipline as before: every phase ends with a checkpoint that must pass bef
 **Baseline at time of writing:** `origin/main` = `7c4bdc6`; `app.js` has an **uncommitted local edit**
 (restock card removed, never pushed). `MODULE1-webpage1.md` untracked. Fix this in R0 before anything else.
 
+**Status tracker:** R0 ✅ · R1 ✅ · R2 ✅ · R3 ✅ · R4 ✅ · R5 ✅ · R6 ✅ · R7 ✅ (verified, no code change — already wired by R5+R6) · R8 ⏳ next · R9–R12 ⬜ pending.
+Live state after R3: `purchases` = 3 seed rows (SC0001/2/3), `settings.next_inventory_seq` = 5,
+`target_daily_cups` = 100, `daily_sales` empty. R3 checkpoint note: plan text says "₱0.052" but
+₱52 ÷ (2×250 ml = 500 ml) is genuinely **₱0.104/ml** — arithmetic slip in the plan; the logic
+(newest rate wins, remaining sums both rows) is verified correct.
+
 ---
 
 ## Module map (new)

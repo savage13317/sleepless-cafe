@@ -8,6 +8,7 @@ const PAGES = [
   { id: 'recipes',    title: 'Recipes',     sub: 'Drink = ingredient combo → one-cup cost' },
   { id: 'overhead',   title: 'Overhead',    sub: 'Indirect costs → ₱ per cup' },
   { id: 'pricing',    title: 'Selling price', sub: 'Menu + margin per drink/size (staff reference)' },
+  { id: 'daily-sales', title: 'Daily Sales', sub: 'End-of-day sales + wastage → revenue, COGS, net' },
   { id: 'ordering',   title: 'Ordering',    sub: 'Daily sells → draw down stock' },
   { id: 'stocktake',  title: 'Stock-take',  sub: 'Reconcile record vs actual → lost cost / savings' },
 ];
@@ -91,22 +92,23 @@ function rate(n) {
 function onHand(r, sold = 0) { return Number(r.qty_packs) * Number(r.pack_size) - Number(sold); }
 function pricePerBase(r) { return Number(r.cost_price) / (Number(r.qty_packs) * Number(r.pack_size)); }
 
-// Total sold base-units per INVENTORY CODE, expanded from every order line through
-// its recipe's ingredients. R6: recipes now store {inventory_code, qty_oum}, so the
-// sold map is keyed by inventory_code (not purchase UUID) — a recipe follows the
-// item across restocks. Shared by Purchases, Stock-take and Ordering.
+// Total OUM consumed per INVENTORY CODE, read from daily_sales (R8/R10: the
+// `orders` page is retired). Both sold lines (expanded through the recipe's
+// ingredients) AND wastage lines (direct OUM) decrement stock — wastage is a
+// pure cost event that consumes stock and generates no revenue. Keyed by
+// inventory_code so a recipe follows the item across restocks.
 async function soldByPurchase() {
-  let orders = [];
+  let sales = [];
   let recipes = [];
   try {
-    orders = await getData('orders', 'order=created_at.desc&select=*');
+    sales = await getData('daily_sales', 'order=created_at.desc&select=*');
     recipes = await getData('recipes', 'order=created_at.desc&select=*');
   } catch (e) { return {}; }
   const recById = {};
   for (const rc of recipes) recById[String(rc.id)] = rc;
   const sold = {};
-  for (const o of orders) {
-    const lines = Array.isArray(o.lines) ? o.lines : [];
+  for (const ds of sales) {
+    const lines = Array.isArray(ds.lines) ? ds.lines : [];
     for (const ln of lines) {
       if (!ln) continue;
       const rc = recById[String(ln.recipe_id)];
@@ -119,6 +121,13 @@ async function soldByPurchase() {
         if (!code) continue;
         sold[code] = (sold[code] || 0) + Number(ing.qty_oum) * qty;
       }
+    }
+    const wast = Array.isArray(ds.wastage) ? ds.wastage : [];
+    for (const w of wast) {
+      if (!w) continue;
+      const code = String(w.inventory_code || '').trim().toUpperCase();
+      if (!code) continue;
+      sold[code] = (sold[code] || 0) + (Number(w.qty_oum) || 0);
     }
   }
   return sold;
@@ -254,6 +263,7 @@ async function buildSite() {
     else if (p.id === 'recipes') main.appendChild(await renderRecipes());
     else if (p.id === 'overhead') main.appendChild(await renderOverhead());
     else if (p.id === 'pricing') main.appendChild(await renderPricing());
+    else if (p.id === 'daily-sales') main.appendChild(await renderDailySales());
     else if (p.id === 'ordering') main.appendChild(await renderOrdering());
     else main.appendChild(section(p.id, p.title, p.sub));
   }
@@ -1229,6 +1239,216 @@ async function renderPricing() {
 // check against current on_hand (sold term already live). If any ingredient would
 // go negative -> BLOCK the order and flag "out of stock". Otherwise POST the
 // order; the sold term then reduces on_hand on the Purchases/Stock-take pages.
+// ---- R8: Module 5 — Daily Sales Recording (replaces Ordering) ----
+// End-of-day record of sales + wastage with honest accounting. Wastage is valued
+// AT COST (₱/OUM, never sell price) and decrements stock; a spilled cup is a
+// wastage line ONLY, never also a sale line. Recording cannot block an over-sell
+// (the day already happened) — it only flags "oversold"; stock-take reconciles.
+// Accounting: Gross = Revenue − COGS; Net = Gross − Wastage; Wastage% = Wastage ÷ COGS.
+async function renderDailySales() {
+  const sec = document.createElement('section');
+  sec.id = 'daily-sales';
+  const t = document.createElement('div'); t.className = 'page-title'; t.textContent = 'Daily Sales';
+  const s = document.createElement('div'); s.className = 'page-sub';
+  s.textContent = 'End-of-day sales + wastage → revenue, COGS, net';
+  sec.append(t, s);
+
+  let recipes = [];
+  let pricing = [];
+  let sales = [];
+  try {
+    recipes = await getData('recipes', 'order=created_at.desc&select=*');
+    pricing = await getData('pricing', 'order=created_at.desc&select=*');
+    sales = await getData('daily_sales', 'order=created_at.desc&select=*');
+  } catch (e) {
+    const err = document.createElement('div'); err.className = 'empty-note';
+    err.textContent = 'Could not load daily-sales data: ' + e.message;
+    sec.appendChild(err);
+    return sec;
+  }
+
+  const recById = {};
+  for (const rc of recipes) recById[String(rc.id)] = rc;
+  const rateByCode = await itemRateByCode();
+  const invItems = await inventoryRows(); // current remaining (includes saved days)
+  const remainingByCode = {};
+  for (const it of invItems) remainingByCode[it.code] = it.remaining;
+
+  // latest sell price per drink·size
+  const sellByKey = {};
+  for (const pr of pricing) {
+    const key = `${pr.drink_name}||${pr.size}`;
+    if (sellByKey[key] == null) sellByKey[key] = Number(pr.sell_price);
+  }
+  function recipeCost(ing) {
+    if (!Array.isArray(ing)) return 0;
+    let sum = 0;
+    for (const ln of ing) {
+      if (!ln) continue;
+      const code = String(ln.inventory_code || '').trim().toUpperCase();
+      if (rateByCode[code] != null) sum += Number(ln.qty_oum) * rateByCode[code];
+    }
+    return sum;
+  }
+  function sellPriceOf(rc) { return sellByKey[`${rc.drink_name}||${rc.size}`]; }
+
+  // §6 history of past days (newest first)
+  if (sales.length) {
+    const hist = document.createElement('div');
+    hist.className = 'card';
+    const ht = document.createElement('div'); ht.textContent = 'Recorded days';
+    hist.appendChild(ht);
+    for (const ds of sales.slice(0, 8)) {
+      const tt = ds.totals || {};
+      const line = document.createElement('div');
+      line.textContent = `id ${String(ds.id).slice(0, 8)} — ${ds.date || ''} — ${ds.recorder || ''} — Rev ${peso(tt.revenue)} · COGS ${peso(tt.cogs)} · Net ${peso(tt.net)}`;
+      hist.appendChild(line);
+    }
+    sec.appendChild(hist);
+  } else {
+    const note = document.createElement('div'); note.className = 'empty-note';
+    note.textContent = 'No days recorded yet — record one below.';
+    sec.appendChild(note);
+  }
+
+  // §5 draw-down: current remaining vs this-day consumption (sold + wastage)
+  const ddTable = document.createElement('table');
+  const ddHead = document.createElement('thead');
+  const ddRow = document.createElement('tr');
+  ['Inventory ID', 'Item', 'UOM', 'Remaining', 'Consumed today', 'Projected', 'Oversold?'].forEach(h => {
+    const th = document.createElement('th'); th.textContent = h; ddRow.appendChild(th);
+  });
+  ddHead.appendChild(ddRow);
+  const ddBody = document.createElement('tbody');
+  for (const it of invItems) {
+    const tr = document.createElement('tr');
+    const projected = it.remaining; // form not yet submitted; shows saved state
+    const cells = [it.code, it.name, it.base_unit, `${it.remaining} ${it.base_unit}`, '—', `${projected} ${it.base_unit}`, projected < 0 ? 'OVERSOLD' : ''];
+    cells.forEach((val, i) => {
+      const td = document.createElement('td');
+      if (i === 6 && projected < 0) { td.className = 'neg'; td.textContent = 'OVERSOLD'; }
+      else td.textContent = String(val);
+      tr.appendChild(td);
+    });
+    ddBody.appendChild(tr);
+  }
+  ddTable.append(ddHead, ddBody);
+  sec.appendChild(ddTable);
+
+  // record form: date + recorder + up to 6 sales lines + up to 6 wastage lines
+  const form = document.createElement('div');
+  form.className = 'card';
+  const dateInp = document.createElement('input');
+  dateInp.className = 'field'; dateInp.setAttribute('placeholder', 'Date (YYYY-MM-DD)');
+  dateInp.setAttribute('aria-label', 'Date');
+  const recInp = document.createElement('input');
+  recInp.className = 'field'; recInp.setAttribute('placeholder', 'Recorder initials');
+  recInp.setAttribute('aria-label', 'Recorder initials');
+  form.append(dateInp, recInp);
+
+  const N_LINES = 6;
+  const saleInputs = [];
+  for (let i = 0; i < N_LINES; i++) {
+    const idInp = document.createElement('input');
+    idInp.className = 'field'; idInp.setAttribute('placeholder', `Sale ${i + 1}: recipe id (copy from Recipes)`);
+    idInp.setAttribute('aria-label', `Sale ${i + 1} recipe id`);
+    const qtyInp = document.createElement('input');
+    qtyInp.className = 'field'; qtyInp.type = 'number';
+    qtyInp.setAttribute('placeholder', `cups ${i + 1}`);
+    qtyInp.setAttribute('aria-label', `Sale ${i + 1} cups sold`);
+    form.append(idInp, qtyInp);
+    saleInputs.push([idInp, qtyInp]);
+  }
+  const N_WASTE = 6;
+  const wasteInputs = [];
+  for (let i = 0; i < N_WASTE; i++) {
+    const codeInp = document.createElement('input');
+    codeInp.className = 'field'; codeInp.setAttribute('placeholder', `Wastage ${i + 1}: Inventory ID (SC…)`);
+    codeInp.setAttribute('aria-label', `Wastage ${i + 1} inventory code`);
+    const qtyInp = document.createElement('input');
+    qtyInp.className = 'field'; qtyInp.type = 'number';
+    qtyInp.setAttribute('placeholder', `qty OUM ${i + 1}`);
+    qtyInp.setAttribute('aria-label', `Wastage ${i + 1} quantity in OUM`);
+    const reasonInp = document.createElement('input');
+    reasonInp.className = 'field'; reasonInp.setAttribute('placeholder', `reason ${i + 1} (spoilage/spill/burnt/other)`);
+    reasonInp.setAttribute('aria-label', `Wastage ${i + 1} reason`);
+    form.append(codeInp, qtyInp, reasonInp);
+    wasteInputs.push([codeInp, qtyInp, reasonInp]);
+  }
+
+  const recBtn = document.createElement('button');
+  recBtn.className = 'btn-add'; recBtn.textContent = 'Record day';
+  form.appendChild(recBtn);
+  const spillNote = document.createElement('div');
+  spillNote.className = 'empty-note';
+  spillNote.textContent = 'A spilled cup = ONE wastage line in OUM — never also a sale line. Wastage is valued at cost and lowers stock.';
+  form.appendChild(spillNote);
+  sec.appendChild(form);
+
+  recBtn.addEventListener('click', () => {
+    const date = dateInp.value.trim();
+    const recorder = recInp.value.trim();
+    const lines = [];
+    for (const [idInp, qtyInp] of saleInputs) {
+      const idKey = idInp.value.trim();
+      const qty = qtyInp.value.trim();
+      if (idKey === '' && qty === '') continue;
+      const rc = recipes.find(r => String(r.id) === idKey || String(r.id).startsWith(idKey));
+      if (!rc || qty === '' || !(Number(qty) > 0)) {
+        const w = document.createElement('div'); w.className = 'neg';
+        w.textContent = 'Each sale line needs a valid recipe id and a positive cups count.';
+        form.appendChild(w); return;
+      }
+      lines.push({ recipe_id: rc.id, size: rc.size, qty: Number(qty) });
+    }
+    const wastage = [];
+    for (const [codeInp, qtyInp, reasonInp] of wasteInputs) {
+      const code = codeInp.value.trim().toUpperCase();
+      const qty = qtyInp.value.trim();
+      const reason = reasonInp.value.trim();
+      if (code === '' && qty === '') continue;
+      if (!rateByCode[code] || qty === '' || !(Number(qty) > 0)) {
+        const w = document.createElement('div'); w.className = 'neg';
+        w.textContent = 'Each wastage line needs a valid Inventory ID (SC…) and a positive qty in OUM.';
+        form.appendChild(w); return;
+      }
+      wastage.push({ inventory_code: code, qty_oum: Number(qty), reason });
+    }
+    if (!lines.length && !wastage.length) {
+      const w = document.createElement('div'); w.className = 'neg';
+      w.textContent = 'Add at least one sale or wastage line.';
+      form.appendChild(w); return;
+    }
+    let revenue = 0, cogs = 0, wastageCost = 0;
+    for (const ln of lines) {
+      const rc = recById[String(ln.recipe_id)];
+      if (!rc) continue;
+      const sp = sellPriceOf(rc); const rcost = recipeCost(rc.ingredients);
+      revenue += (sp == null ? 0 : sp) * ln.qty;
+      cogs += rcost * ln.qty;
+    }
+    for (const w of wastage) {
+      wastageCost += (rateByCode[w.inventory_code] || 0) * w.qty_oum;
+    }
+    const gross = revenue - cogs;
+    const net = gross - wastageCost;
+    const wastagePct = cogs > 0 ? wastageCost / cogs : 0;
+    const totals = {
+      revenue: Math.round(revenue * 100) / 100,
+      cogs: Math.round(cogs * 100) / 100,
+      gross: Math.round(gross * 100) / 100,
+      wastage: Math.round(wastageCost * 100) / 100,
+      wastagePct: Math.round(wastagePct * 1000) / 10,
+      net: Math.round(net * 100) / 100,
+    };
+    // cannot block oversell — record regardless; stock-take reconciles later.
+    postData('daily_sales', { date: date || null, recorder, lines, wastage, totals }).then(() => location.reload());
+  });
+
+  addDeleteCard(sec, sales, 'daily_sales', 'Daily-sales id (copy from a row)');
+  return sec;
+}
+
 async function renderOrdering() {
   const sec = document.createElement('section');
   sec.id = 'ordering';
