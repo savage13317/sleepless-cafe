@@ -530,6 +530,7 @@ async function renderPurchases() {
 
   // audit table — every purchase, newest first. Title + date column; the
   // container shows ~5 recent rows and scrolls vertically for older history.
+  let editingRowId = null;
   const table = document.createElement('table');
   const cap = document.createElement('caption');
   cap.className = 'tbl-caption';
@@ -537,7 +538,7 @@ async function renderPurchases() {
   table.appendChild(cap);
   const thead = document.createElement('thead');
   const hrow = document.createElement('tr');
-  ['Date', 'Inv ID', 'Item / Ingredient', 'Unit', 'Total UOM', '₱ / pack', 'Total price', '₱ / base', 'On hand', 'Low?'].forEach(h => {
+  ['Date', 'Inv ID', 'Item / Ingredient', 'Unit', 'Total UOM', '₱ / pack', 'Total price', '₱ / base', 'On hand', 'Edit'].forEach(h => {
     const th = document.createElement('th'); th.textContent = h; hrow.appendChild(th);
   });
   thead.appendChild(hrow);
@@ -553,15 +554,34 @@ async function renderPurchases() {
     const cells = [
       dateStr, r.inventory_code || '—', r.name, r.base_unit,
       `${totalUom} ${r.base_unit}`, peso(perPack), peso(r.cost_price), rate(pricePerBase(r)),
-      `${oh} ${r.base_unit}`, low ? 'LOW' : '',
+      `${oh} ${r.base_unit}`,
     ];
     cells.forEach((val, i) => {
       const td = document.createElement('td');
       if (i === 5 || i === 6 || i === 7) td.className = 'peso';
-      if (i === 9 && low) { td.className = 'neg'; td.textContent = 'LOW'; }
-      else td.textContent = String(val);
+      td.textContent = String(val);
       tr.appendChild(td);
     });
+    // Edit button per row: re-opens this purchase in the form so it can be
+    // corrected. The original purchase date is preserved (never bumped to today).
+    const editTd = document.createElement('td');
+    const editBtn = document.createElement('button');
+    editBtn.className = 'btn-edit';
+    editBtn.textContent = 'Edit';
+    editBtn.addEventListener('click', () => {
+      editingRowId = String(r.id);
+      inputs.inventory_code.value = r.inventory_code || '';
+      inputs.name.value = r.name || '';
+      inputs.base_unit.value = r.base_unit || '';
+      inputs.pack_size.value = String(r.pack_size);
+      inputs.qty_packs.value = String(r.qty_packs);
+      inputs.cost_per_pack.value = String(r.qty_packs ? Number(r.cost_price) / Number(r.qty_packs) : Number(r.cost_price));
+      inputs.low_at.value = String(r.low_at);
+      updateNameSuggestion();
+      updateTotal();
+    });
+    editTd.appendChild(editBtn);
+    tr.appendChild(editTd);
     tbody.appendChild(tr);
   }
   table.append(thead, tbody);
@@ -594,6 +614,12 @@ async function renderPurchases() {
   const UOM_CHOICES = ['ml', 'mg', 'g', 'pc', 'kg'];
   const inputs = {};
   fields.forEach(([k, label]) => {
+    // R18: show the field name as a visible label above the box instead of
+    // relying on the placeholder text (which was being truncated in the box).
+    const lab = document.createElement('div');
+    lab.className = 'field-label';
+    lab.textContent = label;
+    form.appendChild(lab);
     if (k === 'base_unit') {
       // dropdown instead of free text
       const sel = document.createElement('select');
@@ -610,7 +636,6 @@ async function renderPurchases() {
     }
     const inp = document.createElement('input');
     inp.className = 'field'; inp.dataset.key = k;
-    inp.setAttribute('placeholder', label);
     inp.setAttribute('aria-label', label);
     if (k === 'pack_size' || k === 'qty_packs' || k === 'cost_per_pack' || k === 'low_at') inp.type = 'number';
     else inp.type = 'text';
@@ -684,6 +709,24 @@ async function renderPurchases() {
   sec.appendChild(form);
 
   addBtn.addEventListener('click', async () => {
+    // R18 edit mode: an Edit button was clicked, so update THAT row in place.
+    // date/created_at are intentionally left out of the PATCH -> the original
+    // purchase date is preserved (no new row, no date change).
+    if (editingRowId) {
+      const obj = {};
+      for (const [k] of fields) {
+        const v = inputs[k].value.trim();
+        if (v === '') continue;
+        obj[k] = (k === 'pack_size' || k === 'qty_packs' || k === 'cost_per_pack' || k === 'low_at') ? Number(v) : v;
+      }
+      const packs = obj.qty_packs == null ? 1 : obj.qty_packs;
+      if (obj.cost_per_pack != null) {
+        obj.cost_price = Math.round(obj.cost_per_pack * packs * 100) / 100;
+        delete obj.cost_per_pack;
+      }
+      patchData('purchases', `id=eq.${editingRowId}`, obj).then(() => location.reload());
+      return;
+    }
     const obj = {};
     for (const [k] of fields) {
       const v = inputs[k].value.trim();

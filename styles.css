@@ -99,6 +99,16 @@ caption.tbl-caption {
 }
 .scroll-y > table { width: 100%; }
 
+/* ---- R18: visible field labels + per-row edit button ---- */
+.field-label { color: var(--ink-dim); font-size: .85rem; margin: 0 0 4px; }
+.btn-edit {
+  display: inline-block; cursor: pointer;
+  background: var(--bg-raised); color: var(--ink);
+  border: 1px solid var(--bg-line); border-radius: var(--radius);
+  padding: 4px 10px; font-size: .82rem;
+}
+.btn-edit:hover { border-color: var(--amber); color: var(--amber); }
+
 /* ---- Phase 9: print / export buttons ---- */
 .btn-print {
   display: inline-block; cursor: pointer;
