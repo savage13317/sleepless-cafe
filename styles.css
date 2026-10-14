@@ -100,7 +100,15 @@ caption.tbl-caption {
 .scroll-y > table { width: 100%; }
 
 /* ---- R18: visible field labels + per-row edit button ---- */
-.field-label { color: var(--ink-dim); font-size: .85rem; margin: 0 0 4px; }
+/* R21b: entry form is a two-column layout — label left, input right */
+.field-row { display: flex; align-items: center; gap: 12px; margin: 0 0 10px; }
+.field-label { color: var(--ink-dim); font-size: .85rem; flex: 0 0 210px; }
+.field-row input.field, .field-row select.field {
+  flex: 1; min-width: 120px;
+  background: var(--bg-raised); color: var(--ink);
+  border: 1px solid var(--bg-line); border-radius: var(--radius);
+  padding: 8px 14px; font-size: .9rem; font-family: var(--font);
+}
 .btn-edit {
   display: inline-block; cursor: pointer;
   background: var(--bg-raised); color: var(--ink);

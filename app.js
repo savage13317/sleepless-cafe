@@ -651,12 +651,15 @@ async function renderPurchases() {
   const UOM_CHOICES = ['ml', 'mg', 'g', 'pc', 'kg'];
   const inputs = {};
   fields.forEach(([k, label]) => {
-    // R18: show the field name as a visible label above the box instead of
-    // relying on the placeholder text (which was being truncated in the box).
+    // R18: show the field name as a visible label; R21b: label left, input right
+    // (each pair wrapped in a flex row for a cleaner two-column presentation).
+    const row = document.createElement('div');
+    row.className = 'field-row';
+    form.appendChild(row);
     const lab = document.createElement('div');
     lab.className = 'field-label';
     lab.textContent = label;
-    form.appendChild(lab);
+    row.appendChild(lab);
     if (k === 'base_unit') {
       // dropdown instead of free text
       const sel = document.createElement('select');
@@ -668,7 +671,7 @@ async function renderPurchases() {
         sel.appendChild(opt);
       });
       inputs[k] = sel;
-      form.appendChild(sel);
+      row.appendChild(sel);
       return;
     }
     const inp = document.createElement('input');
@@ -677,7 +680,7 @@ async function renderPurchases() {
     if (k === 'pack_size' || k === 'qty_packs' || k === 'cost_per_pack' || k === 'low_at') inp.type = 'number';
     else inp.type = 'text';
     inputs[k] = inp;
-    form.appendChild(inp);
+    row.appendChild(inp);
   });
 
   // sleeprev §2.1/§2.2 LIVE suggestions: as you type an item name, show matching
