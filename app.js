@@ -531,6 +531,7 @@ async function renderPurchases() {
   // audit table — every purchase, newest first. Title + date column; the
   // container shows ~5 recent rows and scrolls vertically for older history.
   let editingRowId = null;
+  let editingRow = null; // the row the Edit button opened, for name/code re-checks
   const table = document.createElement('table');
   const cap = document.createElement('caption');
   cap.className = 'tbl-caption';
@@ -570,6 +571,7 @@ async function renderPurchases() {
     editBtn.textContent = 'Edit';
     editBtn.addEventListener('click', () => {
       editingRowId = String(r.id);
+      editingRow = r;
       inputs.inventory_code.value = r.inventory_code || '';
       inputs.name.value = r.name || '';
       inputs.base_unit.value = r.base_unit || '';
@@ -719,11 +721,86 @@ async function renderPurchases() {
         if (v === '') continue;
         obj[k] = (k === 'pack_size' || k === 'qty_packs' || k === 'cost_per_pack' || k === 'low_at') ? Number(v) : v;
       }
+      // R19: an edit must NOT blindly keep the row's old Inventory ID. If the
+      // item/ingredient name was changed, re-check it against inventory: a name
+      // that matches an existing item moves the row to that item's code (restock),
+      // a brand-new name may need a fresh code if other purchases still use the old one.
+      const orig = editingRow;
+      const origCode = String(orig.inventory_code || '').trim().toUpperCase();
+      const typedCode = String(inputs.inventory_code.value || '').trim().toUpperCase();
+      const origName = String(orig.name || '').trim();
+      const newName = String(obj.name || '').trim();
+      const nameChanged = newName.toLowerCase() !== origName.toLowerCase();
+
+      let invItems = [];
+      try { invItems = await inventoryRows(); } catch (e) { invItems = [];
+      }
+      const byCode = {};
+      for (const it of invItems) byCode[it.code] = it;
+
+      delete obj.inventory_code;
+      let targetCode = origCode;
+      let note = '';
+
+      if (typedCode && typedCode !== origCode) {
+        // The user deliberately retyped the Inventory ID -> honour that choice.
+        targetCode = typedCode;
+        note = byCode[targetCode]
+          ? `Inventory ID set to ${targetCode} (${byCode[targetCode].name}) — this purchase now belongs to that item.`
+          : `No existing item uses ${targetCode} — it will be created as a new inventory code.`;
+      } else if (nameChanged && newName) {
+        let matches = invItems.filter(it => it.name.toLowerCase() === newName.toLowerCase());
+        if (!matches.length) matches = invItems.filter(it => it.name.toLowerCase().includes(newName.toLowerCase()));
+        if (matches.length > 1) {
+          const w = document.createElement('div'); w.className = 'neg';
+          w.textContent = `"${newName}" matches several inventory items (${matches.map(it => `${it.name} (${it.code})`).join(', ')}). Type the Inventory ID you mean, then save again.`;
+          form.appendChild(w);
+          return;
+        }
+        if (matches.length === 1) {
+          const ex = matches[0];
+          targetCode = ex.code;
+          obj.base_unit = ex.base_unit;
+          note = targetCode === origCode
+            ? `Renamed within ${targetCode} — ${ex.name} (${ex.base_unit}).`
+            : `Matched existing item ${ex.name} — Inventory ID moved to ${targetCode} (restock). UOM set to ${ex.base_unit}.`;
+        } else {
+          // New item name. Keep the code only if this row is the sole purchase of
+          // that item (the whole item is being renamed); otherwise the other rows
+          // still need the old code, so this edited row gets a fresh one.
+          const sameCode = rows.filter((r) => String(r.inventory_code || '').trim().toUpperCase() === origCode);
+          if (origCode && sameCode.length <= 1) {
+            targetCode = origCode;
+            note = `New item name — ${origCode} renamed to ${newName} (no other purchases use ${origCode}).`;
+          } else {
+            const { code, seq, settingsId } = await nextInventoryCode();
+            targetCode = code;
+            note = origCode
+              ? `New item name — ${sameCode.length} other purchases still use ${origCode}, so this row gets a new Inventory ID ${code}.`
+              : `This row had no Inventory ID — assigned new Inventory ID ${code}.`;
+            if (settingsId) patchData('settings', `id=eq.${settingsId}`, { next_inventory_seq: seq + 1 });
+            else postData('settings', { next_inventory_seq: seq + 1 });
+          }
+        }
+      }
+
+      if (!targetCode) {
+        const w = document.createElement('div'); w.className = 'neg';
+        w.textContent = 'This row has no Inventory ID — type one in the box, then save.';
+        form.appendChild(w);
+        return;
+      }
+
       const packs = obj.qty_packs == null ? 1 : obj.qty_packs;
       if (obj.cost_per_pack != null) {
         obj.cost_price = Math.round(obj.cost_per_pack * packs * 100) / 100;
         delete obj.cost_per_pack;
       }
+      obj.inventory_code = targetCode;
+      const savedDate = orig.date || (orig.created_at ? String(orig.created_at).slice(0, 10) : '—');
+      const w = document.createElement('div'); w.className = 'num';
+      w.textContent = `${note ? note + ' ' : ''}Saved to the same row — purchase date ${savedDate} unchanged.`;
+      form.appendChild(w);
       patchData('purchases', `id=eq.${editingRowId}`, obj).then(() => location.reload());
       return;
     }
