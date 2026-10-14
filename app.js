@@ -940,28 +940,53 @@ async function renderOverhead() {
     return sec;
   }
 
-  const drinksPerMonth = settings.length ? Number(settings[0].drinks_per_month) : 0;
+  // Conversion rule, enforced everywhere: 1 year = 365 days = 12 months.
+  // days/month = 365/12 = 30.4167. 1 day = target daily cup sales.
+  const DAYS_PER_MONTH = 365 / 12;
+  const target = settings.length ? Number(settings[0].target_daily_cups) : 0;
 
-  // table of overhead rows
+  // §1 target daily cup sales card (editable) + derived drinks/month
+  const tgtCard = document.createElement('div');
+  tgtCard.className = 'card';
+  const tgtHead = document.createElement('div');
+  tgtHead.textContent = 'Target daily cup sales';
+  const tgtVal = document.createElement('div');
+  tgtVal.className = 'num';
+  tgtVal.textContent = String(target);
+  const tgtDer = document.createElement('div');
+  tgtDer.textContent = `Derived drinks / month ${Math.round(target * DAYS_PER_MONTH)}`;
+  tgtCard.append(tgtHead, tgtVal, tgtDer);
+  sec.appendChild(tgtCard);
+
+  // Convert one (amount, period) into the four figures via the rule above.
+  function figures(amount, period) {
+    const a = Number(amount);
+    if (period === 'yearly') return { perCup: a / (365 * target), perDay: a / 365, perMonth: a / 12, perYear: a };
+    if (period === 'daily') return { perCup: a / target, perDay: a, perMonth: a * DAYS_PER_MONTH, perYear: a * 365 };
+    if (period === 'cup') return { perCup: a, perDay: a * target, perMonth: a * DAYS_PER_MONTH * target, perYear: a * 365 * target };
+    // monthly (default)
+    return { perCup: a / DAYS_PER_MONTH / target, perDay: a / DAYS_PER_MONTH, perMonth: a, perYear: a * 12 };
+  }
+
+  // §3 cost table: Expense item · per cup · per day · per month · per year
   const table = document.createElement('table');
   const thead = document.createElement('thead');
   const hrow = document.createElement('tr');
-  ['id', 'Label', 'Amount', 'Period', 'Monthly ₱'].forEach(h => {
+  ['id', 'Expense item', 'Period', 'Amount ₱', 'per cup', 'per day', 'per month', 'per year'].forEach(h => {
     const th = document.createElement('th'); th.textContent = h; hrow.appendChild(th);
   });
   thead.appendChild(hrow);
   const tbody = document.createElement('tbody');
 
-  let monthlyTotal = 0;
+  let perCupTotal = 0;
   for (const o of overhead) {
-    const amt = Number(o.amount);
-    const monthly = (o.period === 'annual') ? amt / 12 : amt;
-    monthlyTotal += monthly;
+    const f = figures(o.amount, (o.period || 'monthly').toLowerCase());
+    perCupTotal += f.perCup;
     const tr = document.createElement('tr');
-    const cells = [String(o.id).slice(0, 8), o.label, peso(amt), o.period, peso(monthly)];
+    const cells = [String(o.id).slice(0, 8), o.label, o.period, peso(Number(o.amount)), peso(f.perCup), peso(f.perDay), peso(f.perMonth), peso(f.perYear)];
     cells.forEach((val, i) => {
       const td = document.createElement('td');
-      if (i === 2 || i === 4) td.className = 'peso';
+      if (i >= 3) td.className = 'peso';
       td.textContent = String(val);
       tr.appendChild(td);
     });
@@ -970,70 +995,78 @@ async function renderOverhead() {
   table.append(thead, tbody);
   sec.appendChild(table);
 
-  // per-cup figure
-  OVERHEAD_PER_CUP = drinksPerMonth > 0 ? monthlyTotal / drinksPerMonth : 0;
-  const card = document.createElement('div');
-  card.className = 'card';
-  const l1 = document.createElement('div'); l1.textContent = `Total monthly overhead ${peso(monthlyTotal)}`;
-  const l2 = document.createElement('div'); l2.textContent = `Expected drinks / month ${drinksPerMonth}`;
-  const l3 = document.createElement('div'); l3.className = 'peso';
-  l3.textContent = `Overhead per cup ${peso(OVERHEAD_PER_CUP)}`;
-  card.append(l1, l2, l3);
-  sec.appendChild(card);
+  // OVERHEAD_PER_CUP = Σ(per cup) — replaces old Σ(monthly) ÷ drinks_per_month.
+  OVERHEAD_PER_CUP = perCupTotal;
+  const sumCard = document.createElement('div');
+  sumCard.className = 'card';
+  const sumHead = document.createElement('div'); sumHead.textContent = 'Overhead per cup';
+  const sumVal = document.createElement('div'); sumVal.className = 'peso';
+  sumVal.textContent = peso(OVERHEAD_PER_CUP);
+  sumCard.append(sumHead, sumVal);
+  sec.appendChild(sumCard);
 
-  // add-overhead form
+  // §2 expense entry form: Expense item · Period (Yearly/Monthly/Daily/Cup) · Amount ₱
   const form = document.createElement('div');
   form.className = 'card';
   const labelInp = document.createElement('input');
-  labelInp.className = 'field'; labelInp.setAttribute('placeholder', 'Label (rent, salary…)');
-  labelInp.setAttribute('aria-label', 'Label');
+  labelInp.className = 'field'; labelInp.setAttribute('placeholder', 'Expense item (rent, salary…)');
+  labelInp.setAttribute('aria-label', 'Expense item');
+  const periodSel = document.createElement('select');
+  periodSel.className = 'field'; periodSel.setAttribute('aria-label', 'Period measure');
+  ['Yearly', 'Monthly', 'Daily', 'Cup'].forEach(p => {
+    const opt = document.createElement('option'); opt.value = p; periodSel.appendChild(opt);
+  });
   const amtInp = document.createElement('input');
   amtInp.className = 'field'; amtInp.type = 'number';
   amtInp.setAttribute('placeholder', 'Amount (₱)'); amtInp.setAttribute('aria-label', 'Amount in pesos');
-  const periodInp = document.createElement('input');
-  periodInp.className = 'field'; periodInp.setAttribute('placeholder', 'Period (monthly / annual)');
-  periodInp.setAttribute('aria-label', 'Period monthly or annual');
   const addBtn = document.createElement('button');
-  addBtn.className = 'btn-add'; addBtn.textContent = 'Add overhead';
-  form.append(labelInp, amtInp, periodInp, addBtn);
+  addBtn.className = 'btn-add'; addBtn.textContent = 'Add expense';
+  form.append(labelInp, periodSel, amtInp, addBtn);
   sec.appendChild(form);
 
   addBtn.addEventListener('click', () => {
     const label = labelInp.value.trim();
     const amount = Number(amtInp.value);
-    const period = periodInp.value.trim().toLowerCase();
-    if (!label || !(amount >= 0) || !['monthly', 'annual'].includes(period)) {
+    const period = periodSel.value.trim().toLowerCase();
+    if (!label || !(amount >= 0) || !['yearly', 'monthly', 'daily', 'cup'].includes(period)) {
       const w = document.createElement('div'); w.className = 'neg';
-      w.textContent = 'Label, amount and period (monthly/annual) required.';
+      w.textContent = 'Expense item, amount and period required.';
+      form.appendChild(w); return;
+    }
+    // block exact duplicate labels — compare trimmed + case-insensitive, suggest existing
+    const dupe = overhead.find(o => String(o.label).trim().toLowerCase() === label.toLowerCase());
+    if (dupe) {
+      const w = document.createElement('div'); w.className = 'neg';
+      w.textContent = `An expense already uses the label "${dupe.label}" — edit that row instead of adding a duplicate.`;
       form.appendChild(w); return;
     }
     postData('overhead', { label, amount, period }).then(() => location.reload());
   });
 
-  // set drinks/month form (updates the single settings row)
+  // §1 update saved target daily cup sales (PATCH the single settings row)
   const setForm = document.createElement('div');
   setForm.className = 'card';
-  const drinksInp = document.createElement('input');
-  drinksInp.className = 'field'; drinksInp.type = 'number';
-  drinksInp.setAttribute('placeholder', 'Expected drinks / month');
-  drinksInp.setAttribute('aria-label', 'Expected drinks per month');
+  const tgtInp = document.createElement('input');
+  tgtInp.className = 'field'; tgtInp.type = 'number';
+  tgtInp.setAttribute('placeholder', 'Target daily cup sales');
+  tgtInp.setAttribute('aria-label', 'Target daily cup sales');
   const setBtn = document.createElement('button');
-  setBtn.className = 'btn-set'; setBtn.textContent = 'Set drinks / month';
-  setForm.append(drinksInp, setBtn);
+  setBtn.className = 'btn-set'; setBtn.textContent = 'Update saved amount';
+  setForm.append(tgtInp, setBtn);
   sec.appendChild(setForm);
 
   setBtn.addEventListener('click', () => {
-    const v = Number(drinksInp.value);
+    const v = Number(tgtInp.value);
     if (!(v > 0)) {
       const w = document.createElement('div'); w.className = 'neg';
-      w.textContent = 'Enter a positive drinks/month number.';
+      w.textContent = 'Enter a positive target daily cup sales number.';
       setForm.appendChild(w); return;
     }
     if (settings.length) {
-      patchData('settings', `id=eq.${encodeURIComponent(settings[0].id)}`, { drinks_per_month: v })
+      patchData('settings', `id=eq.${encodeURIComponent(settings[0].id)}`, { target_daily_cups: v })
         .then(() => location.reload());
     } else {
-      postData('settings', { drinks_per_month: v }).then(() => location.reload());
+      postData('settings', { target_daily_cups: v }).then(() => location.reload());
     }
   });
 
