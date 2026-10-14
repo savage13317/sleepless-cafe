@@ -6,16 +6,19 @@ Facebook page.
 
 ## What it does
 
-Six pages, each a focused tool (see `PLAN.md` for the full spec):
+Six modules, each a focused tool (see `PLAN.md` for the full spec). Modules are separate
+pages; sections stack inside each page and the nav bar moves back-and-forth between them:
 
-1. **Purchases / materials** — item/ingredient · unit of measure · measure per pack · packs · cost per pack → derived **total UOM**, **total price**, and **₱ per base unit** + **on hand**.
-2. **Recipes** — drink · size · ingredients → one-cup cost (free to create, never changes stock).
-3. **Overhead** — indirect costs → **₱ per cup**.
-4. **Selling price** — menu + margin per drink/size (staff reference; costs are hidden from customers).
-5. **Ordering** — daily ticket; selling a cup **draws down** stock; over-sells are blocked + flagged.
-6. **Stock-take** — reconcile recorded vs actual → **lost cost / unrecorded savings**.
+1. **Purchases** — item/ingredient · unit of measure · measure per pack · packs · cost per pack → derived **total UOM**, **total price**, and **₱ per base unit** + **on hand**. One row per item; the newest purchase sets the current **₱/OUM** (latest-cost-wins). Purchase rows are kept as an audit record.
+2. **Overhead** — indirect costs → **₱ per cup** (yearly/monthly/daily/per-cup inputs normalised to a common per-cup figure).
+3. **Recipes** — drink · size · ingredients → one-cup cost, computed live from each item's current **₱/OUM** (free to create, never changes stock).
+4. **Selling price** — menu + margin per drink/size (staff reference; costs are hidden from customers). Margin = sell − (recipe cost + overhead/cup).
+5. **Daily Sales** — record a day: cups sold per recipe + wastage lines in OUM → revenue, COGS, wastage %, net. Selling a cup **draws down** stock; over-sells are flagged, never blocked (a stock-take reconciles later).
+6. **Inventory** — reconcile recorded vs actual → **lost cost / unrecorded savings**; draw-down log + history.
 
-Plus a **Dashboard** with summary cards: stock value ₱ · low-stock count · quotes this month.
+> The old **Ordering** page is retired — it is replaced by Module 5 (Daily Sales) + Module 6 (Inventory). The `orders` table is no longer read by any page.
+
+Plus a **Dashboard** with summary cards: stock value ₱ · low-stock count · sales recorded this month.
 
 ## Running it locally
 
@@ -41,13 +44,20 @@ All data is stored in **Supabase** (free tier), read over the REST API from the 
 
 - Project ref: `jilhkgicxpewdsqgxfbm` (region Asia-Pacific).
 - Endpoint: `https://jilhkgicxpewdsqgxfbm.supabase.co/rest/v1/<table>`.
-- Tables: `purchases`, `recipes`, `overhead`, `orders`, `stocktakes`, `settings`, `pricing`.
+- Tables: `purchases`, `recipes`, `overhead`, `daily_sales`, `stocktakes`, `settings`, `pricing`. (`orders` still exists in the schema but is unused — the Ordering page is retired.)
 - The Supabase URL + **publishable** (browser-safe) key live in `supabase.js`. The **secret** key is never in the repo.
 
 ### Seeding
 
 `supabase/schema.sql` defines the tables; `supabase/seed.sql` inserts the milk + coffee example
 so the math is testable. Run `schema.sql` first, then `seed.sql`, in the Supabase SQL console.
+
+### Costing caveat — latest-cost-wins re-prices history
+
+₱/OUM is **derived** from the newest purchase of each item, never stored per event. That means a
+stock-take's *lost cost* (or a recipe cost) is valued at the **current** rate: if a later purchase of
+that item had a different cost, the historical lost-cost figure shifts. If that ever matters, store
+₱/OUM at time-of-record instead of deriving it.
 
 ## Security caveat (read this)
 

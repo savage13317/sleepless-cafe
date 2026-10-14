@@ -11,17 +11,19 @@ Privacy: GitHub Pages URL stays **unlisted** (never linked from the FB page) + a
 
 A staff-facing tool that turns raw purchases into a checked, auditable costing record for the café. Flow: **cost up → price down → sell → reconcile**.
 
-| # | Page | Role |
+| # | Module | Role |
 |---|---|---|
 | 0 | Gate | passphrase → session token |
-| 1 | Purchases | buy stock, set ₱/base-unit, low-stock flag, restock |
-| 2 | Recipes | drink = ingredients, S/M/L, cost auto-computed — **free, no draw-down** |
-| 3 | Overhead | rent / depreciation / salary / utilities → per-cup via drinks/month |
+| 1 | Purchases | buy stock, set ₱/base-unit, low-stock flag, restock. One row per item; newest purchase sets current ₱/OUM (latest-cost-wins) |
+| 2 | Overhead | rent / depreciation / salary / utilities → **₱ per cup** (yearly/monthly/daily/per-cup normalised) |
+| 3 | Recipes | drink = ingredients, S/M/L, cost auto-computed from current ₱/OUM — **free, no draw-down** |
 | 4 | Selling price | sell price per drink/size, margin — **staff-only reference** |
-| 5 | Ordering list | daily tickets, **decrement stock on sell**, block on negative |
-| 6 | Stock-take | count in **base units**, variance → lost cost / savings / net, history |
+| 5 | Daily Sales | record a day: cups sold per recipe + wastage lines in OUM → revenue/COGS/net; **draws down stock**, oversell flagged not blocked |
+| 6 | Inventory | reconcile recorded vs actual → **lost cost / savings / net**; draw-down log + history |
 
-All pages sit behind the gate. No public menu; prices are a staff reference during client interaction.
+> **Ordering page retired** — replaced by Module 5 (Daily Sales) + Module 6 (Inventory). The `orders` table is no longer read.
+
+All modules sit behind the gate. No public menu; prices are a staff reference during client interaction.
 
 ---
 
@@ -54,12 +56,13 @@ All pages sit behind the gate. No public menu; prices are a staff reference duri
 | amount | ₱ |
 | period | monthly / annual |
 
-### `orders`
+### `daily_sales`
 | field | note |
 |---|---|
-| date, time | |
-| lines | `[{recipe_id, size, qty}]` |
-| running_total | ₱ |
+| date, recorder | who recorded the day |
+| lines | `[{recipe_id, size, qty}]` — cups sold per recipe |
+| wastage | `[{inventory_code, qty_oum, reason}]` — spilled/wasted in OUM |
+| totals | revenue, cogs, gross, wastage, wastage_pct, net |
 
 ### `stocktakes`
 | field | note |
@@ -101,8 +104,8 @@ Example — milk:
 ```mermaid
 graph LR
     A["purchases\nbrand × pack_size"] -->|convert| H["on_hand (base unit)"]
-    B["orders\nsold (base)"] -->|decrement| H
-    H --> I["stock-take\nactual − on_hand\n= lost / savings"]
+    B["daily_sales\nsold + wastage (OUM)"] -->|decrement| H
+    H --> I["inventory\nactual − recorded\n= lost / savings"]
     C["recipes\nfree, cost only"] --> D["sell price\nmargin"]
     E["overhead ÷ drinks/mo"] --> D
 ```
@@ -111,24 +114,24 @@ graph LR
 
 ## 5. Page-by-page behavior
 
-**1. Purchases** — add row: name, brand, pack size, base unit, qty packs, price paid, supplier, date. Site shows `₱/base` and a **Low** badge when `on_hand < low_at`. A **Restock** action adds qty without changing the recorded price.
+**1. Purchases** — add row: name, brand, pack size, base unit, qty packs, price paid, supplier, date. Site shows `₱/base` and a **Low** badge when `on_hand < low_at`. A **Restock** action adds qty without changing the recorded price. One row per item; the newest purchase sets the current **₱/OUM** (latest-cost-wins); purchase rows are kept as an audit record.
 
-**2. Recipes** — pick a drink, set S/M/L ingredient amounts (each amount references a purchase row, so its unit is inherited). Cost per size = Σ (amount × current ₱/base). Card shows `Name · Size · Ingredients · Cost ₱`. **Creating a recipe is free — it never reduces stock.** It only computes the cost of one cup.
+**2. Overhead** — list of yearly/monthly/daily/per-cup totals (rent, depreciation, staff salary, utilities). One input: **target daily cups**. Site normalises every figure to a common **₱ per cup** (1 year = 365 days = 12 months; monthly→daily uses 365/12 ≈ 30.4167 days). This feeds Module 4.
 
-**3. Overhead** — list of monthly/annual totals (rent, depreciation, staff salary, utilities). Plus one input: **expected drinks/month**. Site computes `overhead_per_cup = Σ monthly ÷ drinks_per_month`. This feeds page 4.
+**3. Recipes** — pick a drink, set S/M/L ingredient amounts (each amount references an inventory item, so its unit is inherited). Cost per size = Σ (amount × current ₱/OUM). Card shows `Name · Size · Ingredients · Cost ₱`. **Creating a recipe is free — it never reduces stock.** It only computes the cost of one cup.
 
 **4. Selling price** — set sell price per drink per size. `margin = sell − (recipe_cost + overhead_per_cup)`. Staff-only view shows cost + margin; prices are a reference you consult when talking to clients.
 
-**5. Ordering list** — daily tickets. Each line = drink + size + qty. On submit, **decrement stock** for every ingredient. If an ingredient would go negative → **block the order and flag "out of stock"**. Running total per ticket.
+**5. Daily Sales** — record a day. Each sale line = recipe + size + cups; each wastage line = inventory item + qty in OUM + reason. On submit, **draw down stock** for every ingredient (and subtract wastage directly). Revenue = Σ cups × sell; COGS = Σ cups × recipe cost; net = revenue − COGS − wastage cost. Oversell is **flagged, never blocked** — a stock-take reconciles later. A spilled cup = ONE wastage line in OUM, never also a sale line.
 
-**6. Stock-take** — physical count reconciles record vs actual. Enter `actual_base` per item. Site computes variance and cost impact:
+**6. Inventory** — physical count reconciles record vs actual. Enter `actual_oum` per item. Site computes variance and cost impact:
 
 | variance | meaning | impact |
 |---|---|---|
-| negative | record > reality — waste, spoilage, theft, unlogged use | **lost cost** = |variance| × ₱/base |
-| positive | reality > record — stock exists, never purchased | **unrecorded gain / savings** = variance × ₱/base |
+| negative | record > reality — waste, spoilage, theft, unlogged use | **lost cost** = |variance| × ₱/OUM |
+| positive | reality > record — stock exists, never purchased | **unrecorded gain / savings** = variance × ₱/OUM |
 
-The stock-take also **sets `on_hand = actual_count`**, so the record self-corrects. Footer summary: **Total lost ₱ · Total savings ₱ · Net ₱**. History list of past stock-takes to see drift over time.
+The reconcile **sets `remaining = actual_count`** (single source of truth). Footer summary: **Total lost ₱ · Total savings ₱ · Net ₱**. Includes a draw-down log (latest sales day) and a history list merging stock-takes + daily-sales records.
 
 ---
 

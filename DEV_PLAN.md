@@ -4,6 +4,8 @@ Companion to `PLAN.md`. This is the **build roadmap**: ordered phases, each with
 
 **Discipline:** every phase ends with a checkpoint that must pass before the next phase starts. We never build on a broken foundation. Each phase is one focused session.
 
+> **Re-architecture note:** the site was later re-architected from the original 6-page map to a 6-module map (see `MODULE1-webpage1.md` + `REV_PLAN.md`). The **Ordering** page (P8 here) was retired and replaced by **Module 5 Daily Sales** + **Module 6 Inventory**. The actual build followed `REV_PLAN.md` phases R0–R12; this roadmap below is the original design intent, kept for reference.
+
 ---
 
 ## Phase dependency map
@@ -13,18 +15,18 @@ graph TD
     P0["P0 Repo + tooling"] --> P1["P1 Supabase schema"]
     P1 --> P2["P2 Frontend skeleton + gate"]
     P2 --> P3["P3 Purchases + ₱/base"]
-    P3 --> P4["P4 Stock-take reconcile"]
+    P3 --> P4["P4 Inventory reconcile"]
     P3 --> P5["P5 Recipes cost"]
     P5 --> P6["P6 Overhead → per-cup"]
     P5 --> P7["P7 Sell price + margin"]
     P6 --> P7
-    P4 --> P8["P8 Orders + draw-down"]
+    P4 --> P8["P8 Daily Sales + draw-down"]
     P7 --> P8
     P8 --> P9["P9 Polish + dashboard"]
     P9 --> P10["P10 Deploy + gate hardening"]
 ```
 
-The math chain drives the order: **purchases → ₱/base → (stock-take, recipe cost) → margin → orders**.
+The math chain drives the order: **purchases → ₱/base → (inventory, recipe cost) → margin → daily-sales**.
 
 ---
 

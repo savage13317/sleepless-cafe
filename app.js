@@ -532,7 +532,7 @@ async function renderPurchases() {
     ['pack_size', 'Measure per pack'], ['cost_per_pack', 'Cost per pack (₱)'],
     ['qty_packs', 'Number of packs'], ['low_at', 'Low threshold'],
   ];
-  const UOM_CHOICES = ['ml', 'mg', 'g'];
+  const UOM_CHOICES = ['ml', 'mg', 'g', 'pc', 'kg'];
   const inputs = {};
   fields.forEach(([k, label]) => {
     if (k === 'base_unit') {
@@ -1536,6 +1536,7 @@ async function renderDailySales() {
   });
 
   addDeleteCard(sec, sales, 'daily_sales', 'Daily-sales id (copy from a row)');
+  addPrintButton(sec, 'Print daily-sales record');
   return sec;
 }
 
