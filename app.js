@@ -407,6 +407,47 @@ async function renderPurchases() {
     return sec;
   }
 
+  // §1 R4: stock value + low stock — computed from the AGGREGATED inventory
+  // (one row per item, latest-cost-wins rate), not from raw purchase rows.
+  const invItems = await inventoryRows();
+  let stockValue = 0;
+  const lowItems = [];
+  for (const it of invItems) {
+    stockValue += it.remaining * it.rate;
+    if (it.low) lowItems.push(it);
+  }
+
+  const svCard = document.createElement('div');
+  svCard.className = 'card';
+  const svHead = document.createElement('div');
+  svHead.textContent = 'Stock value';
+  const svVal = document.createElement('div');
+  svVal.className = 'peso';
+  svVal.textContent = peso(Math.round(stockValue * 100) / 100);
+  svCard.append(svHead, svVal);
+  sec.appendChild(svCard);
+
+  const lowCard = document.createElement('div');
+  lowCard.className = 'card';
+  const lowHead = document.createElement('div');
+  lowHead.textContent = 'Low stock';
+  lowCard.appendChild(lowHead);
+  if (lowItems.length) {
+    for (const it of lowItems) {
+      const line = document.createElement('div');
+      line.className = 'neg';
+      const shortfall = it.lowAt - it.remaining;
+      line.textContent = `${it.code} ${it.name} — short ${shortfall} ${it.base_unit}`;
+      lowCard.appendChild(line);
+    }
+  } else {
+    const none = document.createElement('div');
+    none.className = 'num';
+    none.textContent = '0';
+    lowCard.appendChild(none);
+  }
+  sec.appendChild(lowCard);
+
   // table
   const table = document.createElement('table');
   const thead = document.createElement('thead');
@@ -443,7 +484,6 @@ async function renderPurchases() {
 
   // §3 R3: aggregated inventory — ONE row per inventory_code (latest cost wins).
   // The table above is the audit record (every purchase); this is the merged view.
-  const invItems = await inventoryRows();
   if (invItems.length) {
     const invWrap = document.createElement('div');
     invWrap.className = 'card';
