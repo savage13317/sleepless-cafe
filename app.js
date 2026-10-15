@@ -643,7 +643,7 @@ async function renderPurchases() {
   const form = document.createElement('div');
   form.className = 'card';
   const fields = [
-    ['inventory_code', 'Inventory ID (SC…, blank = auto)'],
+    ['inventory_code', 'Inventory ID (auto-filled — do not type)'],
     ['name', 'Item / Ingredient'], ['base_unit', 'Unit of measure (base unit)'],
     ['pack_size', 'Measure per pack'], ['cost_per_pack', 'Cost per pack (₱)'],
     ['qty_packs', 'Number of packs'], ['low_at', 'Low threshold'],
@@ -679,6 +679,10 @@ async function renderPurchases() {
     inp.setAttribute('aria-label', label);
     if (k === 'pack_size' || k === 'qty_packs' || k === 'cost_per_pack' || k === 'low_at') inp.type = 'number';
     else inp.type = 'text';
+    // R25: the Inventory ID box is READ-ONLY — the app auto-fills it (exact name
+    // match) or leaves it blank (= auto-assign a fresh SC code). Users cannot type
+    // into it, so stray numbers like "23143" / "SC00034" can no longer corrupt data.
+    if (k === 'inventory_code') inp.readonly = true;
     inputs[k] = inp;
     row.appendChild(inp);
   });
@@ -803,7 +807,7 @@ async function renderPurchases() {
         if (!matches.length) matches = invItems.filter(it => it.name.toLowerCase().includes(newName.toLowerCase()));
         if (matches.length > 1) {
           const w = document.createElement('div'); w.className = 'neg';
-          w.textContent = `"${newName}" matches several inventory items (${matches.map(it => `${it.name} (${it.code})`).join(', ')}). Type the Inventory ID you mean, then save again.`;
+          w.textContent = `"${newName}" matches several inventory items (${matches.map(it => `${it.name} (${it.code})`).join(', ')}). Pick one of those exact names instead, then save again.`;
           form.appendChild(w);
           return;
         }
@@ -836,7 +840,7 @@ async function renderPurchases() {
 
       if (!targetCode) {
         const w = document.createElement('div'); w.className = 'neg';
-        w.textContent = 'This row has no Inventory ID — type one in the box, then save.';
+        w.textContent = 'This row has no Inventory ID — enter an item name so one can be auto-assigned, then save.';
         form.appendChild(w);
         return;
       }
