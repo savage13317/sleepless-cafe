@@ -686,14 +686,15 @@ async function renderPurchases() {
   // sleeprev §2.1/§2.2 LIVE suggestions: as you type an item name, show matching
   // inventory items. The Inventory ID box is auto-filled ONLY once the user moves
   // focus away from the name box (e.g. to "Measure per pack"), so it never fights
-  // with active typing. The match is one-directional (the typed text must be a
-  // substring of an existing item name) so "milk1" does NOT merge with "Milk".
+  // with active typing. The match is EXACT (case-insensitive) so "coff" is NOT a
+  // match for "coffee" — it is treated as a brand-new item. "milk" still matches
+  // "Milk".
   const suggBox = document.createElement('div');
   suggBox.className = 'suggestion';
   form.appendChild(suggBox);
   const idField = inputs.inventory_code;
   let autoFilledCode = '';
-  const matchName = (typed) => invItems.filter(it => it.name.toLowerCase().includes(typed));
+  const matchName = (typed) => invItems.filter(it => it.name.toLowerCase() === typed);
   function updateNameSuggestion() {
     const typed = String(inputs.name.value || '').trim().toLowerCase();
     if (!typed) { suggBox.textContent = ''; return; }
@@ -867,7 +868,8 @@ async function renderPurchases() {
     // otherwise the next new code is produced below.
     const typedName = String(obj.name || '').trim().toLowerCase();
     if (typedName && !enteredCode) {
-      const matches = invItems.filter(it => it.name.toLowerCase().includes(typedName));
+      // exact (case-insensitive) match only — "coff" is a new item, not "coffee".
+      const matches = invItems.filter(it => it.name.toLowerCase() === typedName);
       if (matches.length) {
         const ex = matches[0];
         enteredCode = ex.code;
