@@ -1393,6 +1393,8 @@ async function renderOverhead() {
   // days/month = 365/12 = 30.4167. 1 day = target daily cup sales.
   const DAYS_PER_MONTH = 365 / 12;
   const target = settings.length ? Number(settings[0].target_daily_cups) : 0;
+  // R27: guard against an unset/zero target — per-cup figures would be Infinity.
+  const perCup = (monthly) => target > 0 ? monthly / DAYS_PER_MONTH / target : 0;
 
   // §1 target daily cup sales card (editable) + derived drinks/month
   const tgtCard = document.createElement('div');
@@ -1403,25 +1405,36 @@ async function renderOverhead() {
   tgtVal.className = 'num';
   tgtVal.textContent = String(target);
   const tgtDer = document.createElement('div');
-  tgtDer.textContent = `Derived drinks / month ${Math.round(target * DAYS_PER_MONTH)}`;
+  tgtDer.textContent = target > 0
+    ? `≈ ${Math.round(target * DAYS_PER_MONTH).toLocaleString('en-US')} cups / month`
+    : 'Set a target daily cup sales to derive per-cup figures';
   tgtCard.append(tgtHead, tgtVal, tgtDer);
   sec.appendChild(tgtCard);
 
   // Convert one (amount, period) into the four figures via the rule above.
+  // R27: per-cup conversions go through perCup() so a zero target yields 0, not Infinity.
   function figures(amount, period) {
     const a = Number(amount);
-    if (period === 'yearly') return { perCup: a / (365 * target), perDay: a / 365, perMonth: a / 12, perYear: a };
-    if (period === 'daily') return { perCup: a / target, perDay: a, perMonth: a * DAYS_PER_MONTH, perYear: a * 365 };
+    if (period === 'yearly') return { perCup: perCup(a / 12), perDay: a / 365, perMonth: a / 12, perYear: a };
+    if (period === 'daily') return { perCup: perCup(a * DAYS_PER_MONTH), perDay: a, perMonth: a * DAYS_PER_MONTH, perYear: a * 365 };
     if (period === 'cup') return { perCup: a, perDay: a * target, perMonth: a * DAYS_PER_MONTH * target, perYear: a * 365 * target };
     // monthly (default)
-    return { perCup: a / DAYS_PER_MONTH / target, perDay: a / DAYS_PER_MONTH, perMonth: a, perYear: a * 12 };
+    return { perCup: perCup(a), perDay: a / DAYS_PER_MONTH, perMonth: a, perYear: a * 12 };
   }
 
   // §3 cost table: Expense item · per cup · per day · per month · per year
+  // R28: no id column (users never copy ids here) + per-row Edit / Delete columns,
+  // mirroring the purchases table UX. Edit re-opens the row in the expense form
+  // (save PATCHes the SAME row); Delete uses the two-click arm/confirm pattern.
+  let pendingDelRowId = null;
+  let armedDelBtn = null;
+  const delConfirm = document.createElement('div');
+  delConfirm.className = 'del-confirm';
+  let overheadEditingRowId = null;
   const table = document.createElement('table');
   const thead = document.createElement('thead');
   const hrow = document.createElement('tr');
-  ['id', 'Expense item', 'Period', 'Amount ₱', 'per cup', 'per day', 'per month', 'per year'].forEach(h => {
+  ['Expense item', 'Period', 'Amount ₱', 'per cup', 'per day', 'per month', 'per year', 'Edit', 'Delete'].forEach(h => {
     const th = document.createElement('th'); th.textContent = h; hrow.appendChild(th);
   });
   thead.appendChild(hrow);
@@ -1432,17 +1445,56 @@ async function renderOverhead() {
     const f = figures(o.amount, (o.period || 'monthly').toLowerCase());
     perCupTotal += f.perCup;
     const tr = document.createElement('tr');
-    const cells = [String(o.id).slice(0, 8), o.label, o.period, peso(Number(o.amount)), peso(f.perCup), peso(f.perDay), peso(f.perMonth), peso(f.perYear)];
+    const cells = [o.label, o.period, peso(Number(o.amount)), peso(f.perCup), peso(f.perDay), peso(f.perMonth), peso(f.perYear)];
     cells.forEach((val, i) => {
       const td = document.createElement('td');
-      if (i >= 3) td.className = 'peso';
+      if (i >= 2) td.className = 'peso';
       td.textContent = String(val);
       tr.appendChild(td);
     });
+    // Edit button: loads this expense into the entry form; saving PATCHes the same row.
+    const editTd = document.createElement('td');
+    const editBtn = document.createElement('button');
+    editBtn.className = 'btn-edit';
+    editBtn.textContent = 'Edit';
+    editBtn.addEventListener('click', () => {
+      overheadEditingRowId = String(o.id);
+      labelInp.value = o.label || '';
+      const p = String(o.period || 'monthly').toLowerCase();
+      periodSel.value = p.charAt(0).toUpperCase() + p.slice(1);
+      amtInp.value = String(Number(o.amount));
+    });
+    editTd.appendChild(editBtn);
+    tr.appendChild(editTd);
+    // R20-equivalent per-row Delete: first click arms a "Confirm?" prompt under
+    // the table; a second click on the SAME row's button deletes only that expense.
+    const delTd = document.createElement('td');
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn-row-del';
+    delBtn.textContent = 'Delete';
+    delBtn.addEventListener('click', () => {
+      const rid = String(o.id);
+      if (pendingDelRowId === rid) {
+        deleteData('overhead', `id=eq.${encodeURIComponent(rid)}`).then(() => location.reload());
+        return;
+      }
+      if (armedDelBtn && armedDelBtn !== delBtn) {
+        armedDelBtn.textContent = 'Delete';
+        armedDelBtn.classList.remove('armed');
+      }
+      pendingDelRowId = rid;
+      armedDelBtn = delBtn;
+      delBtn.textContent = 'Confirm?';
+      delBtn.classList.add('armed');
+      delConfirm.textContent = `Delete this expense — ${o.label} (${peso(Number(o.amount))} / ${o.period})? Click "Confirm?" on the same row again to delete.`;
+    });
+    delTd.appendChild(delBtn);
+    tr.appendChild(delTd);
     tbody.appendChild(tr);
   }
   table.append(thead, tbody);
   sec.appendChild(table);
+  sec.appendChild(delConfirm);
 
   // OVERHEAD_PER_CUP = Σ(per cup) — replaces old Σ(monthly) ÷ drinks_per_month.
   OVERHEAD_PER_CUP = perCupTotal;
@@ -1455,23 +1507,62 @@ async function renderOverhead() {
   sec.appendChild(sumCard);
 
   // §2 expense entry form: Expense item · Period (Yearly/Monthly/Daily/Cup) · Amount ₱
+  // R27: mirror the purchases-page UX — two-column field rows (label left, input
+  // right) and a LIVE suggestion box: typing an expense name shows matching rows
+  // already in the cost table, so users see e.g. "Rent" exists before adding a duplicate.
   const form = document.createElement('div');
   form.className = 'card';
+  const mkRow = (labelText) => {
+    const row = document.createElement('div');
+    row.className = 'field-row';
+    const lab = document.createElement('div');
+    lab.className = 'field-label';
+    lab.textContent = labelText;
+    row.appendChild(lab);
+    form.appendChild(row);
+    return row;
+  };
+  const labelRow = mkRow('Expense item');
   const labelInp = document.createElement('input');
   labelInp.className = 'field'; labelInp.setAttribute('placeholder', 'Expense item (rent, salary…)');
   labelInp.setAttribute('aria-label', 'Expense item');
+  labelRow.appendChild(labelInp);
+  const periodRow = mkRow('Period measure');
   const periodSel = document.createElement('select');
   periodSel.className = 'field'; periodSel.setAttribute('aria-label', 'Period measure');
   ['Yearly', 'Monthly', 'Daily', 'Cup'].forEach(p => {
-    const opt = document.createElement('option'); opt.value = p; periodSel.appendChild(opt);
+    // R27b: options need textContent, not just value — a value-only <option>
+    // renders BLANK in some browsers (same pattern as the purchases UOM dropdown).
+    const opt = document.createElement('option'); opt.value = p; opt.textContent = p;
+    periodSel.appendChild(opt);
   });
+  periodRow.appendChild(periodSel);
+  const amtRow = mkRow('Amount (₱)');
   const amtInp = document.createElement('input');
   amtInp.className = 'field'; amtInp.type = 'number';
   amtInp.setAttribute('placeholder', 'Amount (₱)'); amtInp.setAttribute('aria-label', 'Amount in pesos');
+  amtRow.appendChild(amtInp);
   const addBtn = document.createElement('button');
   addBtn.className = 'btn-add'; addBtn.textContent = 'Add expense';
-  form.append(labelInp, periodSel, amtInp, addBtn);
+  form.appendChild(addBtn);
   sec.appendChild(form);
+
+  // sleeprev Module 2 §2: "show suggestion based on entry from existing cost table".
+  // PARTIAL (substring) match while typing, like the purchases suggBox — typing "re"
+  // hints "Rent" already exists so the user knows a duplicate would be blocked.
+  const suggBox = document.createElement('div');
+  suggBox.className = 'suggestion';
+  form.appendChild(suggBox);
+  function updateExpenseSuggestion() {
+    const typed = String(labelInp.value || '').trim().toLowerCase();
+    if (!typed) { suggBox.textContent = ''; return; }
+    const partial = overhead.filter((o) => String(o.label || '').trim().toLowerCase().includes(typed));
+    suggBox.textContent = partial.length
+      ? 'Already in cost table: ' + partial.map((o) => `${o.label} (${peso(Number(o.amount))} / ${o.period})`).join(', ')
+      : 'New expense — no match in cost table';
+  }
+  labelInp.addEventListener('input', updateExpenseSuggestion);
+  updateExpenseSuggestion();
 
   addBtn.addEventListener('click', () => {
     const label = labelInp.value.trim();
@@ -1482,26 +1573,43 @@ async function renderOverhead() {
       w.textContent = 'Expense item, amount and period required.';
       form.appendChild(w); return;
     }
+    // R28 edit mode: an Edit button was clicked, so update THAT row in place —
+    // PATCH the same row (skip the duplicate-label check, the row IS its own label).
+    if (overheadEditingRowId) {
+      const obj = { label, amount, period };
+      patchData('overhead', `id=eq.${encodeURIComponent(overheadEditingRowId)}`, obj)
+        .then(() => location.reload());
+      return;
+    }
     // block exact duplicate labels — compare trimmed + case-insensitive, suggest existing
     const dupe = overhead.find(o => String(o.label).trim().toLowerCase() === label.toLowerCase());
     if (dupe) {
       const w = document.createElement('div'); w.className = 'neg';
-      w.textContent = `An expense already uses the label "${dupe.label}" — edit that row instead of adding a duplicate.`;
+      w.textContent = `An expense already uses the label "${dupe.label}" (${peso(Number(dupe.amount))} / ${dupe.period}) — change that row's amount instead of adding a duplicate.`;
       form.appendChild(w); return;
     }
     postData('overhead', { label, amount, period }).then(() => location.reload());
   });
 
   // §1 update saved target daily cup sales (PATCH the single settings row)
+  // R27: same two-column field-row presentation as the expense form.
   const setForm = document.createElement('div');
   setForm.className = 'card';
+  const setRow = document.createElement('div');
+  setRow.className = 'field-row';
+  const setLab = document.createElement('div');
+  setLab.className = 'field-label';
+  setLab.textContent = 'Target daily cup sales';
+  setRow.appendChild(setLab);
   const tgtInp = document.createElement('input');
   tgtInp.className = 'field'; tgtInp.type = 'number';
   tgtInp.setAttribute('placeholder', 'Target daily cup sales');
   tgtInp.setAttribute('aria-label', 'Target daily cup sales');
+  setRow.appendChild(tgtInp);
+  setForm.appendChild(setRow);
   const setBtn = document.createElement('button');
   setBtn.className = 'btn-set'; setBtn.textContent = 'Update saved amount';
-  setForm.append(tgtInp, setBtn);
+  setForm.appendChild(setBtn);
   sec.appendChild(setForm);
 
   setBtn.addEventListener('click', () => {
@@ -1519,8 +1627,8 @@ async function renderOverhead() {
     }
   });
 
-  addDeleteCard(sec, overhead, 'overhead', 'Overhead id (copy from a row)');
-
+  // R28: the id-copy delete card is gone — per-row Delete buttons above replace it,
+  // and users no longer see (or need) ids on this page.
   return sec;
 }
 
