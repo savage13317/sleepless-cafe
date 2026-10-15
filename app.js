@@ -684,25 +684,32 @@ async function renderPurchases() {
   });
 
   // sleeprev §2.1/§2.2 LIVE suggestions: as you type an item name, show matching
-  // inventory items. The Inventory ID box is auto-filled ONLY once the user moves
-  // focus away from the name box (e.g. to "Measure per pack"), so it never fights
-  // with active typing. The match is EXACT (case-insensitive) so "coff" is NOT a
-  // match for "coffee" — it is treated as a brand-new item. "milk" still matches
-  // "Milk".
+  // inventory items. Two different match rules, deliberately:
+  //  * suggPartial(typed) — PARTIAL (substring) match, used ONLY to display the
+  //    suggestion line. So typing "coff" surfaces "coffee (SC0003)" as a hint.
+  //  * exactName(typed)  — EXACT (case-insensitive) match, used to AUTO-FILL the
+  //    Inventory ID. So "coff" is NOT auto-assigned to coffee — it stays a new
+  //    item until you type the full name. "milk" still matches "Milk".
+  // The ID box is auto-filled ONLY once focus moves off the name box, so it never
+  // fights with active typing.
   const suggBox = document.createElement('div');
   suggBox.className = 'suggestion';
   form.appendChild(suggBox);
   const idField = inputs.inventory_code;
   let autoFilledCode = '';
-  const matchName = (typed) => invItems.filter(it => it.name.toLowerCase() === typed);
+  const suggPartial = (typed) => invItems.filter(it => it.name.toLowerCase().includes(typed));
+  const exactName = (typed) => invItems.filter(it => it.name.toLowerCase() === typed);
   function updateNameSuggestion() {
     const typed = String(inputs.name.value || '').trim().toLowerCase();
     if (!typed) { suggBox.textContent = ''; return; }
-    const matches = matchName(typed);
-    suggBox.textContent = matches.length
-      ? 'In inventory: ' + matches.map(it => `${it.name} (${it.code})`).join(', ')
+    // suggestion line = PARTIAL matches (so "coff" hints "coffee (SC0003)")
+    const partial = suggPartial(typed);
+    suggBox.textContent = partial.length
+      ? 'In inventory: ' + partial.map(it => `${it.name} (${it.code})`).join(', ')
       : 'New item — no inventory match';
-    // if the name changed so our auto-filled ID no longer applies, re-resolve it
+    // auto-ID re-resolve uses EXACT matches only, so a partial like "coff" never
+    // hijacks the ID box.
+    const matches = exactName(typed);
     if (autoFilledCode && !matches.some(it => it.code === autoFilledCode)) {
       // R19b edit mode: the box holds the row's original code — when the edited
       // name now matches a different inventory item, correct the box live.
@@ -714,7 +721,7 @@ async function renderPurchases() {
   function applyAutoId() {
     const typed = String(inputs.name.value || '').trim().toLowerCase();
     if (!typed) return;
-    const matches = matchName(typed);
+    const matches = exactName(typed); // EXACT only — "coff" must not auto-fill coffee's code
     if (matches.length !== 1) return;
     const code = matches[0].code;
     const cur = idField.value.trim().toUpperCase();
