@@ -280,3 +280,16 @@ Accounting, stated once: `Gross = Revenue − COGS`; `Net = Gross − Wastage`; 
 R0, R1, R10, R12 are fast. **R2, R3, R6 are the risky ones** (ID counter, aggregation, recipe re-keying) — verify hardest. R5 and R8 are the heaviest new math. R4, R7, R9, R11 are medium.
 
 **Build order rationale:** same as the original — the math foundation first. Inventory identity (R2/R3) must be stable before anything references items by code (R6), before anything sells against them (R8), before anything reconciles them (R9).
+
+---
+
+## Post-plan revision log (R13 → R38b) — session 6
+
+The plan phases R0–R12 are done; user then drove module-by-module fine-tuning rounds (R13–R38b). Full per-round detail lives in the repo memory file; key milestones:
+
+- **R13–R26 — M1 Purchases** (commits 770c3ec … 39ba97a): auto Inventory ID on typed name, live suggestion box (partial hints, exact auto-ID), two-column field rows, per-row Edit (date preserved) + two-click Delete, ID box hard-locked from typing, same-tab reload via `sessionStorage slc_view`, scroll-capped audit table with Date column + captions.
+- **R27–R29 — M2 Overhead** (commit 577ae6d): two-column forms, live expense-name suggestions, zero-target guard, cost table without id column + per-row Edit/Delete, clean "≈ 2,738 cups / month" derived line.
+- **R30–R37 — M3 Recipes** (commit f1e7720): recipe table + per-row Edit/Delete, two-column form, ingredient dropdown of inventory on hand (blank '—' first option), qty label shows recorded base_unit, per-ingredient cost lines, one-cup cost = live recipe cost + overhead/cup (fresh `overheadPerCup()`, not the stale global), Edit refreshes all live boxes, progressive ingredient disclosure (Ingredient 1 first, next reveals only when previous fully filled, up to 15).
+- **R38–R38b — M4 Selling price** (commit a3962d4, pushed f1e7720..a3962d4): `renderPricing()` mirrors M1–M3 UX — fresh overhead per cup, table (Drink/Size/Recipe cost/Overhead per cup/All-in cost/Sell price/Margin/Edit, no id, scroll-y + caption), per-row Edit (PATCH same pricing row), recipe-dropdown form with live margin-preview box, NO Delete column (recipe deletion stays in the Recipes tab), table sorted by margin highest→lowest (unsold rows last).
+
+**BEST-VERSION CHECKPOINT (2026-10-15):** user declared the R38b state "our best version" — `origin/main` = **a3962d4**, verified locally at `:8731/?v=44#pricing`. Modules 1–4 complete and verified; M5 (Daily Sales) and M6 (Inventory) still at plan-phase skeletons awaiting the same UX bar.

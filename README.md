@@ -20,6 +20,14 @@ pages; sections stack inside each page and the nav bar moves back-and-forth betw
 
 Plus a **Dashboard** with summary cards: stock value ₱ · low-stock count · sales recorded this month.
 
+## Current build status
+
+Best-version checkpoint (2026-10-15): `origin/main` = **a3962d4**. Modules 1–4 (Purchases, Overhead,
+Recipes, Selling price) are complete and verified to a consistent UX bar — two-column forms, live
+suggestion/preview boxes, dropdowns of existing data, per-row Edit, fresh overhead-per-cup math,
+no stale globals. Modules 5–6 (Daily Sales, Inventory) remain at their plan-phase skeletons.
+See `REV_PLAN.md` for the full revision log (R0–R38b).
+
 ## Running it locally
 
 Open the folder and serve it:
