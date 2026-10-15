@@ -1248,7 +1248,8 @@ async function renderRecipes() {
   const rateByCode = await itemRateByCode();
   const unitByCode = {};
   const nameByCode = {};
-  for (const it of await inventoryRows()) { unitByCode[it.code] = it.base_unit; nameByCode[it.code] = it.name; }
+  const invItems = await inventoryRows();
+  for (const it of invItems) { unitByCode[it.code] = it.base_unit; nameByCode[it.code] = it.name; }
 
   // cost of one recipe row, computed live from current ₱/OUM per inventory_code
   function recipeCost(ing) {
@@ -1262,65 +1263,332 @@ async function renderRecipes() {
     return sum;
   }
 
-  // existing recipe cards
-  if (recipes.length) {
-    for (const rc of recipes) {
-      const card = document.createElement('div');
-      card.className = 'card';
-      const head = document.createElement('div');
-      head.textContent = `${rc.drink_name} · ${rc.size}`;
-      card.appendChild(head);
-      const idTag = document.createElement('div');
-      idTag.className = 'num';
-      idTag.textContent = 'id ' + String(rc.id).slice(0, 8);
-      card.appendChild(idTag);
-      const ing = Array.isArray(rc.ingredients) ? rc.ingredients : [];
-      if (ing.length) {
-        const ul = document.createElement('div');
-        ul.textContent = ing.map(ln => {
-          const code = String(ln.inventory_code || '').trim().toUpperCase();
-          const label = nameByCode[code] || '?';
-          const unit = unitByCode[code] || '';
-          return `${ln.qty_oum} ${unit} ${label} (${code})`;
-        }).join(' · ');
-        card.appendChild(ul);
-      }
-      const cost = document.createElement('div');
-      cost.className = 'peso';
-      cost.textContent = peso(recipeCost(ing));
-      card.appendChild(cost);
-      sec.appendChild(card);
+  // R34: overhead per cup, computed FRESH here with the exact same conversion rule
+  // as the Overhead page (1 year = 365 days = 12 months; days/month = 365/12;
+  // 1 day = target daily cups). Loaded here (not the OVERHEAD_PER_CUP global) so
+  // the cost box is correct even when landing directly on Recipes, where the
+  // Overhead page may not have rendered yet.
+  async function overheadPerCup() {
+    let overhead = [];
+    let settings = [];
+    try {
+      overhead = await getData('overhead', 'order=created_at.desc&select=*');
+      settings = await getData('settings', 'select=*');
+    } catch (e) { return 0; }
+    const DAYS_PER_MONTH = 365 / 12;
+    const target = settings.length ? Number(settings[0].target_daily_cups) : 0;
+    const perCup = (monthly) => target > 0 ? monthly / DAYS_PER_MONTH / target : 0;
+    let total = 0;
+    for (const o of overhead) {
+      const a = Number(o.amount);
+      const p = (o.period || 'monthly').toLowerCase();
+      if (p === 'yearly') total += perCup(a / 12);
+      else if (p === 'daily') total += perCup(a * DAYS_PER_MONTH);
+      else if (p === 'cup') total += a;
+      else total += perCup(a);
     }
+    return total;
+  }
+  const ohPerCup = await overheadPerCup();
+
+  // R30: recipe TABLE (not cards) — one row per (drink, size), mirroring the
+  // purchases / overhead table UX (R28): no id column, per-row Edit + Delete.
+  // Edit re-opens the recipe in the entry form (save PATCHes the SAME row);
+  // Delete uses the two-click arm/confirm pattern (first click arms, second on
+  // the SAME row deletes only that recipe).
+  let recipesEditingRowId = null;
+  let pendingDelRowId = null;
+  let armedDelBtn = null;
+  const delConfirm = document.createElement('div');
+  delConfirm.className = 'del-confirm';
+  const ingLine = (ing) => Array.isArray(ing) ? ing.map(ln => {
+    const code = String(ln.inventory_code || '').trim().toUpperCase();
+    const label = nameByCode[code] || '?';
+    const unit = unitByCode[code] || '';
+    return `${ln.qty_oum} ${unit} ${label} (${code})`;
+  }).join(' · ') : '';
+  if (recipes.length) {
+    const table = document.createElement('table');
+    const cap = document.createElement('caption');
+    cap.className = 'tbl-caption';
+    cap.textContent = 'Recipes — one row per drink · size';
+    table.appendChild(cap);
+    const thead = document.createElement('thead');
+    const hrow = document.createElement('tr');
+    ['Drink', 'Size', 'Ingredients', 'One-cup cost', 'Edit', 'Delete'].forEach(h => {
+      const th = document.createElement('th'); th.textContent = h; hrow.appendChild(th);
+    });
+    thead.appendChild(hrow);
+    const tbody = document.createElement('tbody');
+    for (const rc of recipes) {
+      const ing = Array.isArray(rc.ingredients) ? rc.ingredients : [];
+      const tr = document.createElement('tr');
+      // R35: one-cup cost = live recipe cost (current ₱/OUM per inventory_code)
+      // + overhead per cup, matching the form's cost box. Recomputed fresh on every
+      // render, so it follows inventory price edits and overhead edits on reload.
+      const cells = [rc.drink_name, rc.size, ingLine(ing), peso(recipeCost(ing) + ohPerCup)];
+      cells.forEach((val, i) => {
+        const td = document.createElement('td');
+        if (i === 3) td.className = 'peso';
+        td.textContent = String(val);
+        tr.appendChild(td);
+      });
+      // Edit button: loads this recipe into the entry form; saving PATCHes the SAME row.
+      const editTd = document.createElement('td');
+      const editBtn = document.createElement('button');
+      editBtn.className = 'btn-edit';
+      editBtn.textContent = 'Edit';
+      editBtn.addEventListener('click', () => {
+        recipesEditingRowId = String(rc.id);
+        nameInp.value = rc.drink_name || '';
+        const sz = String(rc.size || 'S');
+        sizeSel.value = sz.charAt(0).toUpperCase() + sz.slice(1);
+        for (let i = 0; i < N_ING; i++) {
+          const ln = ing[i];
+          ingInputs[i][0].value = ln ? String(ln.inventory_code || '') : '';
+          ingInputs[i][1].value = ln ? String(ln.qty_oum) : '';
+        }
+        // R34 fix: assigning .value programmatically does NOT fire the 'input'/'change'
+        // events, so the live boxes would stay stale after pressing Edit. Refresh all
+        // three (per-item cost lines, one-cup cost, and the qty unit labels) explicitly.
+        updateResolve();
+        updateCostTotal();
+        for (const [sel, inp, lab, num] of ingInputs) updateQtyLabel(sel, inp, lab, num);
+        updateReveal(); // R37: show only as many ingredient rows as the saved recipe fills
+      });
+      editTd.appendChild(editBtn);
+      tr.appendChild(editTd);
+      // Per-row Delete: first click arms a "Confirm?" prompt; second click on the
+      // SAME row deletes only that recipe (id=eq.<rowId>) — other rows untouched.
+      const delTd = document.createElement('td');
+      const delBtn = document.createElement('button');
+      delBtn.className = 'btn-row-del';
+      delBtn.textContent = 'Delete';
+      delBtn.addEventListener('click', () => {
+        const rid = String(rc.id);
+        if (pendingDelRowId === rid) {
+          deleteData('recipes', `id=eq.${encodeURIComponent(rid)}`).then(() => location.reload());
+          return;
+        }
+        if (armedDelBtn && armedDelBtn !== delBtn) {
+          armedDelBtn.textContent = 'Delete';
+          armedDelBtn.classList.remove('armed');
+        }
+        pendingDelRowId = rid;
+        armedDelBtn = delBtn;
+        delBtn.textContent = 'Confirm?';
+        delBtn.classList.add('armed');
+        delConfirm.textContent = `Delete this recipe — ${rc.drink_name} (${rc.size}) (${peso(recipeCost(ing))} / cup)? Click "Confirm?" on the same row again to delete.`;
+      });
+      delTd.appendChild(delBtn);
+      tr.appendChild(delTd);
+      tbody.appendChild(tr);
+    }
+    table.append(thead, tbody);
+    const scrollWrap = document.createElement('div');
+    scrollWrap.className = 'scroll-y';
+    scrollWrap.appendChild(table);
+    sec.appendChild(scrollWrap);
+    sec.appendChild(delConfirm);
   } else {
     const note = document.createElement('div'); note.className = 'empty-note';
     note.textContent = 'No recipes yet — build one below.';
     sec.appendChild(note);
   }
 
-  // recipe editor form: name + size + up to 6 ingredient (inventory code, qty) pairs
+  // §2 recipe entry form — mirror M1/M2 UX: two-column field rows (label left,
+  // input right), Size dropdown, live drink-name suggestion box, live ingredient-resolve
+  // box (shows each item's name + current ₱/OUM as IDs are typed), and a live one-cup cost.
   const form = document.createElement('div');
   form.className = 'card';
+  const mkRow = (labelText) => {
+    const row = document.createElement('div');
+    row.className = 'field-row';
+    const lab = document.createElement('div');
+    lab.className = 'field-label';
+    lab.textContent = labelText;
+    row.appendChild(lab);
+    form.appendChild(row);
+    return row;
+  };
+  const nameRow = mkRow('Drink name');
   const nameInp = document.createElement('input');
   nameInp.className = 'field'; nameInp.setAttribute('placeholder', 'Drink name');
   nameInp.setAttribute('aria-label', 'Drink name');
-  const sizeInp = document.createElement('input');
-  sizeInp.className = 'field'; sizeInp.setAttribute('placeholder', 'Size (S / M / L)');
-  sizeInp.setAttribute('aria-label', 'Size S M or L');
-  form.append(nameInp, sizeInp);
+  nameRow.appendChild(nameInp);
+  const sizeRow = mkRow('Size');
+  const sizeSel = document.createElement('select');
+  sizeSel.className = 'field'; sizeSel.setAttribute('aria-label', 'Size S M or L');
+  ['S', 'M', 'L'].forEach(sz => {
+    // R27b lesson: <option> needs BOTH value AND textContent or it renders blank.
+    const opt = document.createElement('option'); opt.value = sz; opt.textContent = sz;
+    sizeSel.appendChild(opt);
+  });
+  sizeRow.appendChild(sizeSel);
 
-  const N_ING = 6;
+  // R37: progressive disclosure — the form starts showing ONLY Ingredient 1; each
+  // further ingredient reveals itself only once the previous one is FULLY filled
+  // (an inventory item AND a positive qty). Cascades up to N_ING.
+  const N_ING = 15;
   const ingInputs = [];
+  const ingRows = []; // [idRow, qtyRow] per ingredient, so updateReveal can hide/show them
+  // R31: ingredient selection is a DROPDOWN of all inventory items on hand (mirrors
+  // the M1 UOM dropdown) instead of a free-typed Inventory ID. Option value = the
+  // inventory code (so save/resolve logic still reads a code); textContent = "name (CODE)".
+  const invOptions = invItems.slice().sort((a, b) => String(a.name).localeCompare(String(b.name)));
   for (let i = 0; i < N_ING; i++) {
-    const idInp = document.createElement('input');
-    idInp.className = 'field'; idInp.setAttribute('placeholder', `Ingredient ${i + 1}: Inventory ID (SC…)`);
-    idInp.setAttribute('aria-label', `Ingredient ${i + 1} inventory code`);
+    const idRow = mkRow(`Ingredient ${i + 1} — Inventory item`);
+    const idSel = document.createElement('select');
+    idSel.className = 'field'; idSel.setAttribute('aria-label', `Ingredient ${i + 1} inventory item`);
+    // A <select> defaults to its FIRST option, so an untouched ingredient slot would
+    // otherwise read as the first inventory item. A blank leading option makes empty
+    // slots read as empty (resolve + cost boxes skip them; save skips blank+blank rows).
+    const blankOpt = document.createElement('option');
+    blankOpt.value = ''; blankOpt.textContent = '—';
+    idSel.appendChild(blankOpt);
+    for (const it of invOptions) {
+      // R27b lesson: <option> needs BOTH value AND textContent or it renders blank.
+      const opt = document.createElement('option');
+      opt.value = it.code; opt.textContent = `${it.name} (${it.code})`;
+      idSel.appendChild(opt);
+    }
+    idRow.appendChild(idSel);
+    const qtyRow = mkRow(`Ingredient ${i + 1} — qty (OUM)`);
     const qtyInp = document.createElement('input');
     qtyInp.className = 'field'; qtyInp.type = 'number';
-    qtyInp.setAttribute('placeholder', `qty ${i + 1} (OUM)`);
+    qtyInp.setAttribute('placeholder', 'qty (OUM)');
     qtyInp.setAttribute('aria-label', `Ingredient ${i + 1} quantity in OUM`);
-    form.append(idInp, qtyInp);
-    ingInputs.push([idInp, qtyInp]);
+    qtyRow.appendChild(qtyInp);
+    // R32: keep refs to the qty row's label element + its ingredient number so we
+    // can rewrite the label to the selected item's recorded unit of measure live.
+    ingInputs.push([idSel, qtyInp, qtyRow.firstChild, i + 1]);
+    ingRows.push([idRow, qtyRow]); // R37: row refs for progressive reveal/hide
   }
+
+  // live drink-name suggestion: PARTIAL match against existing recipes, so users
+  // see whether a (drink, size) already exists before adding a duplicate.
+  const suggBox = document.createElement('div');
+  suggBox.className = 'suggestion';
+  form.appendChild(suggBox);
+  function updateNameSuggestion() {
+    const typed = String(nameInp.value || '').trim().toLowerCase();
+    if (!typed) { suggBox.textContent = ''; return; }
+    const partial = recipes.filter((rc) => String(rc.drink_name || '').trim().toLowerCase().includes(typed));
+    suggBox.textContent = partial.length
+      ? 'Already a recipe: ' + partial.map((rc) => `${rc.drink_name} (${rc.size})`).join(', ')
+      : 'New drink — no recipe yet';
+  }
+  nameInp.addEventListener('input', updateNameSuggestion);
+  updateNameSuggestion();
+
+  // live ingredient-resolve box: as Inventory IDs are typed, show each item's
+  // name + current ₱/OUM (mirrors M1 "auto pull data from inventory").
+  const resolveBox = document.createElement('div');
+  resolveBox.className = 'suggestion';
+  form.appendChild(resolveBox);
+  // R33: show each ingredient on its own line with its LINE COST (qty x current
+  // rate) so users can see how much each input contributes, and mark the single
+  // most expensive ingredient. Built as child divs (one per line) because .suggestion
+  // has no white-space:pre-wrap, so newlines in textContent would not render.
+  function updateResolve() {
+    while (resolveBox.firstChild) resolveBox.removeChild(resolveBox.firstChild);
+    const lines = [];
+    for (const [idInp, qtyInp] of ingInputs) {
+      const code = String(idInp.value || '').trim().toUpperCase();
+      if (!code) continue;
+      const nm = nameByCode[code] || '?';
+      const r = rateByCode[code];
+      const unit = unitByCode[code] || 'OUM';
+      const qtyRaw = String(qtyInp.value || '').trim();
+      const qty = Number(qtyRaw);
+      const lineCost = (r != null && qty > 0) ? qty * r : null;
+      lines.push({ code, nm, r, unit, qtyRaw, lineCost });
+    }
+    // R34: no "most expensive" marker — users identify it manually; they just
+    // want the cost per item input shown.
+    for (const ln of lines) {
+      const div = document.createElement('div');
+      let txt = `${ln.code} ${ln.nm}`;
+      txt += ln.r != null ? ' · ' + rate(ln.r) + '/' + ln.unit : ' · no stock rate';
+      if (ln.qtyRaw) txt += ' × ' + ln.qtyRaw + ' ' + ln.unit;
+      if (ln.lineCost != null) txt += ' = ' + peso(Math.round(ln.lineCost * 100) / 100);
+      div.textContent = txt;
+      resolveBox.appendChild(div);
+    }
+  }
+  // R32: once an inventory item is picked from the dropdown, rewrite the qty row's
+  // label + placeholder to that item's RECORDED unit of measure (its base_unit)
+  // instead of the generic "OUM". Blank selection falls back to "OUM".
+  function updateQtyLabel(sel, inp, lab, num) {
+    const code = String(sel.value || '').trim().toUpperCase();
+    const unit = code ? (unitByCode[code] || 'OUM') : 'OUM';
+    if (lab) lab.textContent = `Ingredient ${num} — qty (${unit})`;
+    inp.setAttribute('placeholder', `qty (${unit})`);
+  }
+  // R37: reveal cascade. Ingredient 1 is always shown. Ingredient k+1 becomes
+  // visible only once Ingredient k is fully filled (inventory item AND qty > 0).
+  // Not-yet-revealed rows are display:none so the user fills them top-down.
+  function updateReveal() {
+    let revealed = 1;
+    for (let i = 0; i < N_ING - 1; i++) {
+      const [sel, inp] = ingInputs[i];
+      const code = String(sel.value || '').trim();
+      const qty = Number(inp.value);
+      if (code && qty > 0) revealed = i + 2; else break;
+    }
+    for (let i = 0; i < N_ING; i++) {
+      const [idRow, qtyRow] = ingRows[i];
+      const show = i < revealed;
+      idRow.style.display = show ? '' : 'none';
+      qtyRow.style.display = show ? '' : 'none';
+    }
+  }
+  for (const [idInp, qtyInp, qtyLab, num] of ingInputs) {
+    // idInp is now a <select> dropdown — picking an option fires 'change' (not 'input'),
+    // so listen to both so the resolve + cost boxes update when an item is selected.
+    idInp.addEventListener('input', updateResolve);
+    idInp.addEventListener('change', updateResolve);
+    qtyInp.addEventListener('input', updateResolve);
+    idInp.addEventListener('input', updateCostTotal);
+    idInp.addEventListener('change', updateCostTotal);
+    qtyInp.addEventListener('input', updateCostTotal);
+    idInp.addEventListener('input', () => updateQtyLabel(idInp, qtyInp, qtyLab, num));
+    idInp.addEventListener('change', () => updateQtyLabel(idInp, qtyInp, qtyLab, num));
+    // R37: as any ingredient's item/qty changes, recompute which rows are revealed.
+    idInp.addEventListener('input', updateReveal);
+    idInp.addEventListener('change', updateReveal);
+    qtyInp.addEventListener('input', updateReveal);
+    updateQtyLabel(idInp, qtyInp, qtyLab, num);
+  }
+  updateResolve();
+  updateReveal();
+
+  // live one-cup cost box — recomputes from the current ingredient inputs (same
+  // live-cost rule as the table: qty × current ₱/OUM per inventory_code).
+  const totalBox = document.createElement('div');
+  totalBox.className = 'total-box';
+  const totalLabel = document.createElement('span');
+  totalLabel.textContent = 'One-cup cost: ';
+  const totalVal = document.createElement('span');
+  totalVal.className = 'peso';
+  totalBox.append(totalLabel, totalVal);
+  form.appendChild(totalBox);
+  // R34: one-cup cost now includes the Overhead-per-cup figure (recipe cost +
+  // overhead), matching the Pricing page's all-in cost.
+  function updateCostTotal() {
+    let sum = 0;
+    for (const [idInp, qtyInp] of ingInputs) {
+      const code = String(idInp.value || '').trim().toUpperCase();
+      const qty = Number(qtyInp.value);
+      if (code && rateByCode[code] != null && qty > 0) sum += qty * rateByCode[code];
+    }
+    totalVal.textContent = sum > 0 ? peso(Math.round((sum + ohPerCup) * 100) / 100) : '—';
+  }
+  updateCostTotal();
+  const ohNote = document.createElement('div');
+  ohNote.className = 'empty-note';
+  ohNote.textContent = `One-cup cost = ingredients + overhead per cup (${peso(ohPerCup)}).`;
+  form.appendChild(ohNote);
 
   const saveBtn = document.createElement('button');
   saveBtn.className = 'btn-save'; saveBtn.textContent = 'Save recipe';
@@ -1333,7 +1601,7 @@ async function renderRecipes() {
 
   saveBtn.addEventListener('click', () => {
     const name = nameInp.value.trim();
-    const size = sizeInp.value.trim().toUpperCase();
+    const size = sizeSel.value.trim().toUpperCase();
     if (!name || !['S', 'M', 'L'].includes(size)) {
       const w = document.createElement('div'); w.className = 'neg';
       w.textContent = 'Drink name and size (S/M/L) are required.';
@@ -1346,7 +1614,7 @@ async function renderRecipes() {
       if (codeKey === '' && qty === '') continue;
       if (!rateByCode[codeKey] || qty === '' || !(Number(qty) > 0)) {
         const w = document.createElement('div'); w.className = 'neg';
-        w.textContent = 'Each ingredient needs a valid Inventory ID (e.g. SC0001) and a positive qty.';
+        w.textContent = 'Each ingredient needs an inventory item (pick it from the dropdown) and a positive qty.';
         form.appendChild(w); return;
       }
       ingredients.push({ inventory_code: codeKey, qty_oum: Number(qty) });
@@ -1356,11 +1624,26 @@ async function renderRecipes() {
       w.textContent = 'Add at least one ingredient.';
       form.appendChild(w); return;
     }
+    // R30 edit mode: an Edit button was clicked, so update THAT row in place —
+    // PATCH the same recipe (skip the duplicate drink+size check, the row IS itself).
+    if (recipesEditingRowId) {
+      patchData('recipes', `id=eq.${encodeURIComponent(recipesEditingRowId)}`, { drink_name: name, size, ingredients })
+        .then(() => location.reload());
+      return;
+    }
+    // block duplicate (drink, size) — same drink+size already has a recipe row.
+    const dupe = recipes.find(rc => String(rc.drink_name).trim().toLowerCase() === name.toLowerCase() && String(rc.size).toUpperCase() === size);
+    if (dupe) {
+      const w = document.createElement('div'); w.className = 'neg';
+      w.textContent = `A recipe already exists for "${dupe.drink_name}" (${dupe.size}) — use that row's Edit button to change it instead of adding a duplicate.`;
+      form.appendChild(w); return;
+    }
     // POST to `recipes` ONLY — purchases are never touched (no draw-down).
     postData('recipes', { drink_name: name, size, ingredients }).then(() => location.reload());
   });
 
-  addDeleteCard(sec, recipes, 'recipes', 'Recipe id (copy from a card)');
+  // R30: the id-copy delete card is gone — per-row Delete buttons above replace it,
+  // and users no longer see (or need) ids on this page (same as R28 overhead).
   return sec;
 }
 
