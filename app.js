@@ -1723,8 +1723,9 @@ async function renderOverhead() {
   thead.appendChild(hrow);
   const tbody = document.createElement('tbody');
 
+  // R39: cost table sorted alphabetically by expense label (case-insensitive).
   let perCupTotal = 0;
-  for (const o of overhead) {
+  for (const o of overhead.slice().sort((a, b) => String(a.label || '').localeCompare(String(b.label || ''), undefined, true))) {
     const f = figures(o.amount, (o.period || 'monthly').toLowerCase());
     perCupTotal += f.perCup;
     const tr = document.createElement('tr');
@@ -2185,6 +2186,14 @@ async function renderPricing() {
     }
     div.textContent = txt;
     marginBox.appendChild(div);
+    // R39c: suggested selling-price range = all-in cost ÷ 0.8 (low) .. all-in cost ÷ 0.6 (high).
+    if (allIn > 0) {
+      const lo = allIn / 0.8;
+      const hi = allIn / 0.6;
+      const sug = document.createElement('div');
+      sug.textContent = `Suggested sell price: ${peso(Math.round(lo * 100) / 100)} – ${peso(Math.round(hi * 100) / 100)}`;
+      marginBox.appendChild(sug);
+    }
   }
   drinkSel.addEventListener('change', updateMarginPreview);
   priceInp.addEventListener('input', updateMarginPreview);
