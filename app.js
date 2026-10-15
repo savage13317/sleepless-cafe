@@ -801,6 +801,8 @@ async function renderPurchases() {
       delete obj.inventory_code;
       let targetCode = origCode;
       let note = '';
+      // R26: any counter bump issued below must finish before the final reload.
+      let bump = Promise.resolve();
 
       if (typedCode && typedCode !== origCode) {
         // The user deliberately retyped the Inventory ID -> honour that choice.
@@ -838,8 +840,9 @@ async function renderPurchases() {
             note = origCode
               ? `New item name — ${sameCode.length} other purchases still use ${origCode}, so this row gets a new Inventory ID ${code}.`
               : `This row had no Inventory ID — assigned new Inventory ID ${code}.`;
-            if (settingsId) patchData('settings', `id=eq.${settingsId}`, { next_inventory_seq: seq + 1 });
-            else postData('settings', { next_inventory_seq: seq + 1 });
+            bump = settingsId
+              ? patchData('settings', `id=eq.${settingsId}`, { next_inventory_seq: seq + 1 })
+              : postData('settings', { next_inventory_seq: seq + 1 });
           }
         }
       }
@@ -861,7 +864,7 @@ async function renderPurchases() {
       const w = document.createElement('div'); w.className = 'num';
       w.textContent = `${note ? note + ' ' : ''}Saved to the same row — purchase date ${savedDate} unchanged.`;
       form.appendChild(w);
-      patchData('purchases', `id=eq.${editingRowId}`, obj).then(() => location.reload());
+      patchData('purchases', `id=eq.${editingRowId}`, obj).then(() => bump).then(() => location.reload());
       return;
     }
     const obj = {};
@@ -931,13 +934,15 @@ async function renderPurchases() {
       bump.then(() => postData('purchases', obj)).then(() => location.reload());
     } else {
       // blank -> auto-produce the next code from the counter, then bump it (R2).
+      // R26: the bump MUST complete before location.reload(). Reloading right after
+      // the PATCH was merely *initiated* aborted it in-flight, so the counter never
+      // moved and two new items both got SC0004 (milk2/milk3 collision).
       const { code, seq, settingsId } = await nextInventoryCode();
       obj.inventory_code = code;
-      postData('purchases', obj).then(() => {
-        if (settingsId) patchData('settings', `id=eq.${settingsId}`, { next_inventory_seq: seq + 1 });
-        else postData('settings', { next_inventory_seq: seq + 1 });
-        location.reload();
-      });
+      const bump = settingsId
+        ? patchData('settings', `id=eq.${settingsId}`, { next_inventory_seq: seq + 1 })
+        : postData('settings', { next_inventory_seq: seq + 1 });
+      postData('purchases', obj).then(() => bump).then(() => location.reload());
     }
   });
 
