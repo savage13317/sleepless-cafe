@@ -1920,6 +1920,19 @@ async function renderOverhead() {
 // margin = sell_price - (recipe_cost + overhead_per_cup).
 //   margin >= 0 -> green (profitable); margin < 0 -> red (selling below cost).
 // Staff reference only: this page never changes stock or recipes.
+//
+// R38 (M4): mirror the M1-M3 UX now that Recipes (M3) is built. Changes vs the
+// original renderPricing():
+//  - overhead per cup computed FRESH here (same as M3's R34) instead of reading the
+//    OVERHEAD_PER_CUP global, which is stale/0 when landing directly on #pricing
+//    (buildSite renders ONE module per render).
+//  - table drops the id column, adds a caption + scroll-y wrapper, and per-row Edit
+//    + Delete (two-click arm/confirm) exactly like the Recipes/Overhead/Purchases
+//    tables. Edit re-opens that drink·size in the form (save PATCHes the same pricing
+//    row); Delete removes only that pricing row.
+//  - the sell-price form now picks an EXISTING recipe from a dropdown (drink + size)
+//    instead of free-typing a name, and shows a live margin-preview box as you type
+//    (mirrors M3's live resolve/cost boxes).
 async function renderPricing() {
   const sec = document.createElement('section');
   sec.id = 'pricing';
@@ -1954,6 +1967,33 @@ async function renderPricing() {
     return sum;
   }
 
+  // R38: overhead per cup, computed FRESH here (identical conversion rule to the
+  // Overhead page + M3's R34) so the margin is correct even when landing directly
+  // on #pricing, where the Overhead page may not have rendered and OVERHEAD_PER_CUP
+  // would be a stale/0 global.
+  async function overheadPerCup() {
+    let overhead = [];
+    let settings = [];
+    try {
+      overhead = await getData('overhead', 'order=created_at.desc&select=*');
+      settings = await getData('settings', 'select=*');
+    } catch (e) { return 0; }
+    const DAYS_PER_MONTH = 365 / 12;
+    const target = settings.length ? Number(settings[0].target_daily_cups) : 0;
+    const perCup = (monthly) => target > 0 ? monthly / DAYS_PER_MONTH / target : 0;
+    let total = 0;
+    for (const o of overhead) {
+      const a = Number(o.amount);
+      const p = (o.period || 'monthly').toLowerCase();
+      if (p === 'yearly') total += perCup(a / 12);
+      else if (p === 'daily') total += perCup(a * DAYS_PER_MONTH);
+      else if (p === 'cup') total += a;
+      else total += perCup(a);
+    }
+    return total;
+  }
+  const ohPerCup = await overheadPerCup();
+
   // latest sell price per drink·size (pricing is newest-first)
   const sellByKey = {};
   for (const pr of pricing) {
@@ -1961,35 +2001,66 @@ async function renderPricing() {
     if (sellByKey[key] == null) sellByKey[key] = pr;
   }
 
-  // table: one row per recipe, with cost / overhead / sell / margin
-  const table = document.createElement('table');
-  const thead = document.createElement('thead');
-  const hrow = document.createElement('tr');
-  ['id', 'Drink', 'Size', 'Recipe cost', 'Overhead / cup', 'All-in cost', 'Sell price', 'Margin'].forEach(h => {
-    const th = document.createElement('th'); th.textContent = h; hrow.appendChild(th);
-  });
-  thead.appendChild(hrow);
-  const tbody = document.createElement('tbody');
+  // recipe rows keyed by drink·size (newest-first, dedupe) so the form dropdown +
+  // the live margin box can look up a recipe's cost by the same key the table uses.
+  const recipeByKey = {};
+  for (const rc of recipes) {
+    const key = `${rc.drink_name}||${rc.size}`;
+    if (recipeByKey[key] == null) recipeByKey[key] = rc;
+  }
 
+  // R38 edit state. NOTE: this Selling price table has NO Delete column — deleting a
+  // recipe belongs to the Recipes tab, so here we only offer per-row Edit.
+  let pricingEditingKey = null;   // "drink||size" being re-priced via the form
+  let pricingEditingRowId = null; // existing pricing row id to PATCH (null -> POST new)
+
+  // R38b: build the row data first, then SORT by margin highest -> lowest. Rows with
+  // no sell price yet have a null margin and sort to the bottom. Deleting recipes is
+  // the Recipes tab's job, so this table only offers Edit.
+  const priceRows = [];
+  for (const rc of recipes) {
+    const ing = Array.isArray(rc.ingredients) ? rc.ingredients : [];
+    const rcost = recipeCost(ing);
+    const allIn = rcost + ohPerCup;
+    const key = `${rc.drink_name}||${rc.size}`;
+    const sellRow = sellByKey[key];
+    const sell = sellRow == null ? null : Number(sellRow.sell_price);
+    const margin = (sell == null) ? null : sell - allIn;
+    priceRows.push({ rc, ing, rcost, allIn, key, sellRow, sell, margin });
+  }
+  priceRows.sort((a, b) => {
+    if (a.margin == null && b.margin == null) return 0;
+    if (a.margin == null) return 1;   // null margin sorts last
+    if (b.margin == null) return -1;
+    return b.margin - a.margin;       // highest -> lowest
+  });
+
+  // table: one row per recipe, with cost / overhead / all-in / sell / margin + Edit
   if (recipes.length) {
-    for (const rc of recipes) {
-      const ing = Array.isArray(rc.ingredients) ? rc.ingredients : [];
-      const rcost = recipeCost(ing);
-      const allIn = rcost + OVERHEAD_PER_CUP;
-      const sellRow = sellByKey[`${rc.drink_name}||${rc.size}`];
-      const sell = sellRow == null ? null : Number(sellRow.sell_price);
-      const margin = (sell == null) ? null : sell - allIn;
+    const table = document.createElement('table');
+    const cap = document.createElement('caption');
+    cap.className = 'tbl-caption';
+    cap.textContent = 'Selling price — one row per drink · size';
+    table.appendChild(cap);
+    const thead = document.createElement('thead');
+    const hrow = document.createElement('tr');
+    ['Drink', 'Size', 'Recipe cost', 'Overhead / cup', 'All-in cost', 'Sell price', 'Margin', 'Edit'].forEach(h => {
+      const th = document.createElement('th'); th.textContent = h; hrow.appendChild(th);
+    });
+    thead.appendChild(hrow);
+    const tbody = document.createElement('tbody');
+    for (const row of priceRows) {
+      const { rc, ing, rcost, allIn, key, sellRow, sell, margin } = row;
       const tr = document.createElement('tr');
       const cells = [
-        sellRow == null ? '—' : String(sellRow.id).slice(0, 8),
-        rc.drink_name, rc.size, peso(rcost), peso(OVERHEAD_PER_CUP), peso(allIn),
+        rc.drink_name, rc.size, peso(rcost), peso(ohPerCup), peso(allIn),
         sell == null ? '—' : peso(sell),
         margin == null ? '—' : peso(Math.round(margin * 100) / 100),
       ];
       cells.forEach((val, i) => {
         const td = document.createElement('td');
-        if (i === 3 || i === 4 || i === 5 || i === 6) td.className = 'peso';
-        if (i === 7 && margin != null) {
+        if (i === 2 || i === 3 || i === 4 || i === 5) td.className = 'peso';
+        if (i === 6 && margin != null) {
           td.className = margin >= 0 ? 'pos' : 'neg';
           td.textContent = (margin < 0 ? '-' : '') + peso(Math.abs(Math.round(margin * 100) / 100));
         } else {
@@ -1997,10 +2068,30 @@ async function renderPricing() {
         }
         tr.appendChild(td);
       });
+      // Edit button: re-opens this drink·size in the sell-price form. If a pricing
+      // row already exists for it, saving PATCHes that SAME row; otherwise it POSTs a
+      // new one. Pre-fills the dropdown + price so the user just tweaks the number.
+      const editTd = document.createElement('td');
+      const editBtn = document.createElement('button');
+      editBtn.className = 'btn-edit';
+      editBtn.textContent = 'Edit';
+      editBtn.addEventListener('click', () => {
+        pricingEditingKey = key;
+        pricingEditingRowId = sellRow == null ? null : String(sellRow.id);
+        drinkSel.value = key;
+        priceInp.value = sell == null ? '' : String(sell);
+        // R35 lesson: programmatic .value never fires events -> refresh the live box.
+        updateMarginPreview();
+      });
+      editTd.appendChild(editBtn);
+      tr.appendChild(editTd);
       tbody.appendChild(tr);
     }
     table.append(thead, tbody);
-    sec.appendChild(table);
+    const scrollWrap = document.createElement('div');
+    scrollWrap.className = 'scroll-y';
+    scrollWrap.appendChild(table);
+    sec.appendChild(scrollWrap);
   } else {
     const note = document.createElement('div'); note.className = 'empty-note';
     note.textContent = 'No recipes yet — build a recipe first, then set a sell price below.';
@@ -2011,42 +2102,128 @@ async function renderPricing() {
   const card = document.createElement('div');
   card.className = 'card';
   const cl = document.createElement('div'); cl.className = 'peso';
-  cl.textContent = `Overhead per cup ${peso(OVERHEAD_PER_CUP)} (applied to every drink)`;
+  cl.textContent = `Overhead per cup ${peso(ohPerCup)} (applied to every drink)`;
   card.appendChild(cl);
   sec.appendChild(card);
 
-  // add sell-price form
+  // sell-price form — mirror M3 UX: two-column field rows, a dropdown of EXISTING
+  // recipes (drink + size) so a sell price always attaches to a real recipe, and a
+  // live margin-preview box that recomputes as the drink/price change.
   const form = document.createElement('div');
   form.className = 'card';
-  const nameInp = document.createElement('input');
-  nameInp.className = 'field'; nameInp.setAttribute('placeholder', 'Drink name (match a recipe)');
-  nameInp.setAttribute('aria-label', 'Drink name');
-  const sizeInp = document.createElement('input');
-  sizeInp.className = 'field'; sizeInp.setAttribute('placeholder', 'Size (S / M / L)');
-  sizeInp.setAttribute('aria-label', 'Size S M or L');
+  const mkRow = (labelText) => {
+    const row = document.createElement('div');
+    row.className = 'field-row';
+    const lab = document.createElement('div');
+    lab.className = 'field-label';
+    lab.textContent = labelText;
+    row.appendChild(lab);
+    form.appendChild(row);
+    return row;
+  };
+
+  const drinkRow = mkRow('Drink (pick a recipe)');
+  const drinkSel = document.createElement('select');
+  drinkSel.className = 'field';
+  drinkSel.setAttribute('aria-label', 'Drink, pick an existing recipe');
+  // A <select> defaults to its FIRST option, so prepend a blank option so an
+  // untouched slot reads as empty (save skips it).
+  const blankOpt = document.createElement('option');
+  blankOpt.value = ''; blankOpt.textContent = '—';
+  drinkSel.appendChild(blankOpt);
+  // R38: options are the DISTINCT existing recipes (drink · size), newest-first, so
+  // a sell price always maps to a real recipe. option value = "drink||size" (the
+  // same key the table + margin box use); textContent = "Drink (Size)".
+  const recipeOptions = [];
+  const seenKeys = {};
+  for (const rc of recipes) {
+    const key = `${rc.drink_name}||${rc.size}`;
+    if (seenKeys[key]) continue;
+    seenKeys[key] = true;
+    recipeOptions.push({ key, label: `${rc.drink_name} (${rc.size})` });
+  }
+  recipeOptions.sort((a, b) => a.label.localeCompare(b.label));
+  for (const o of recipeOptions) {
+    // R27b lesson: <option> needs BOTH value AND textContent or it renders blank.
+    const opt = document.createElement('option');
+    opt.value = o.key; opt.textContent = o.label;
+    drinkSel.appendChild(opt);
+  }
+  drinkRow.appendChild(drinkSel);
+
+  const priceRow = mkRow('Sell price (₱)');
   const priceInp = document.createElement('input');
   priceInp.className = 'field'; priceInp.type = 'number';
   priceInp.setAttribute('placeholder', 'Sell price (₱)');
   priceInp.setAttribute('aria-label', 'Sell price in pesos');
+  priceRow.appendChild(priceInp);
+
+  // live margin-preview box: as the drink + price change, show that recipe's all-in
+  // cost and the resulting margin (green profitable / red below cost). Mirrors M3's
+  // live resolve/cost boxes.
+  const marginBox = document.createElement('div');
+  marginBox.className = 'suggestion';
+  form.appendChild(marginBox);
+  function updateMarginPreview() {
+    while (marginBox.firstChild) marginBox.removeChild(marginBox.firstChild);
+    const key = String(drinkSel.value || '');
+    if (!key) return;
+    const rc = recipeByKey[key];
+    if (!rc) return;
+    const rcost = recipeCost(Array.isArray(rc.ingredients) ? rc.ingredients : []);
+    const allIn = rcost + ohPerCup;
+    const price = Number(priceInp.value);
+    const div = document.createElement('div');
+    let txt = `${rc.drink_name} (${rc.size}) · all-in ${peso(Math.round(allIn * 100) / 100)}`;
+    if (price >= 0 && priceInp.value !== '') {
+      const margin = price - allIn;
+      txt += ` · sell ${peso(Math.round(price * 100) / 100)}`;
+      txt += ` · margin ${margin >= 0 ? '' : '-'}${peso(Math.abs(Math.round(margin * 100) / 100))}`;
+      txt += margin >= 0 ? ' (profitable)' : ' (below cost)';
+    } else {
+      txt += ' · set a sell price to see margin';
+    }
+    div.textContent = txt;
+    marginBox.appendChild(div);
+  }
+  drinkSel.addEventListener('change', updateMarginPreview);
+  priceInp.addEventListener('input', updateMarginPreview);
+  updateMarginPreview();
+
   const addBtn = document.createElement('button');
   addBtn.className = 'btn-price'; addBtn.textContent = 'Set sell price';
-  form.append(nameInp, sizeInp, priceInp, addBtn);
+  form.appendChild(addBtn);
+  const freeNote = document.createElement('div');
+  freeNote.className = 'empty-note';
+  freeNote.textContent = 'Setting a sell price never changes stock or recipes — it is a staff reference.';
+  form.appendChild(freeNote);
   sec.appendChild(form);
 
   addBtn.addEventListener('click', () => {
-    const name = nameInp.value.trim();
-    const size = sizeInp.value.trim().toUpperCase();
-    const price = Number(priceInp.value);
-    if (!name || !['S', 'M', 'L'].includes(size) || !(price >= 0)) {
+    const key = String(drinkSel.value || '');
+    if (!key) {
       const w = document.createElement('div'); w.className = 'neg';
-      w.textContent = 'Drink name, size (S/M/L) and a non-negative price required.';
+      w.textContent = 'Pick a recipe (drink + size) from the dropdown first.';
       form.appendChild(w); return;
     }
-    // newest row wins (latest sell price per drink·size), so a POST is enough.
+    const parts = key.split('||');
+    const name = parts[0];
+    const size = parts[1];
+    const price = Number(priceInp.value);
+    if (!(price >= 0)) {
+      const w = document.createElement('div'); w.className = 'neg';
+      w.textContent = 'Enter a non-negative sell price (₱).';
+      form.appendChild(w); return;
+    }
+    // R38 edit mode: an Edit button was clicked, so update THAT pricing row in place.
+    if (pricingEditingRowId) {
+      patchData('pricing', `id=eq.${encodeURIComponent(pricingEditingRowId)}`,
+        { drink_name: name, size, sell_price: price }).then(() => location.reload());
+      return;
+    }
+    // Otherwise POST a new sell price (latest row per drink·size wins on read).
     postData('pricing', { drink_name: name, size, sell_price: price }).then(() => location.reload());
   });
-
-  addDeleteCard(sec, pricing, 'pricing', 'Sell-price id (copy from a row)');
 
   return sec;
 }
