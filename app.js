@@ -701,6 +701,12 @@ async function renderPurchases() {
   form.appendChild(suggBox);
   const idField = inputs.inventory_code;
   let autoFilledCode = '';
+  // R25b: hard-lock the ID box. The readonly attribute alone is not enough (some
+  // browsers / automation still push keystrokes into it), so we also intercept the
+  // 'input' event: any real keystroke into the ID box is immediately reverted to
+  // whatever the app last auto-filled (or blank). Setting idField.value in JS does
+  // NOT fire 'input', so applyAutoId's programmatic fill is unaffected.
+  idField.addEventListener('input', () => { idField.value = autoFilledCode; });
   const suggPartial = (typed) => invItems.filter(it => it.name.toLowerCase().includes(typed));
   const exactName = (typed) => invItems.filter(it => it.name.toLowerCase() === typed);
   function updateNameSuggestion() {
