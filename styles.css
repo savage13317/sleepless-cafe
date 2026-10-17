@@ -181,6 +181,18 @@ caption.tbl-caption {
 }
 .btn-record:hover { border-color: var(--amber); color: var(--amber); }
 
+/* ---- R48: M6 §1 stock-take count column + Total row ---- */
+.stocktake-cell { background: transparent; padding: 0; }
+.stocktake-cell input.field {
+  min-width: 72px;
+  background: var(--bg-raised); color: var(--ink);
+  border: 1px solid var(--bg-line);
+  padding: 4px 8px; font-size: .85rem; font-family: var(--mono);
+}
+.stocktake-cell input.field:disabled { opacity: .35; }
+.total-row { color: var(--ink); font-size: .85rem; font-weight: 600; }
+.total-row td { border-top: 1px solid var(--bg-line); }
+
 /* ---- responsive: collapse nav to hamburger on mobile ---- */
 @media (max-width: 720px) {
   header { flex-wrap: wrap; }
@@ -199,6 +211,12 @@ caption.tbl-caption {
   header { position: static; }
   .btn-print, .btn-add, .btn-restock, .btn-record, .btn-save, .btn-price,
   .btn-set, .btn-submit, input.field, input.lock, select.field { display: none; }
+  /* R48 print: keep the count column as an empty outlined box on paper */
+  .stocktake-cell { background: #fff; }
+  .stocktake-cell input.field {
+    display: inline-block; width: 64px; height: 14px;
+    border: 1px solid #bbb; background: #fff;
+  }
   .table-wrap { overflow-x: visible; }
   .peso { color: #7a5a1f; }
   .pos { color: #2f6b2f; }

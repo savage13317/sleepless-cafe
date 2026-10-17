@@ -51,8 +51,8 @@ create table if not exists stocktakes (
   id         uuid        default gen_random_uuid() primary key not null,
   date       date        default current_date,
   counter    text        default '',           -- who counted (initials)
-  lines      jsonb       default '[]',         -- [{purchase_id, actual_base, variance, impact}]
-  totals     jsonb       default '{}',         -- {lost, savings, net}
+  lines      jsonb       default '[]',         -- [{inventory_code, actual_oum, variance, impact}]
+  totals     jsonb       default '{}',         -- {lost, savings, net, ledger:[{inventory_code, variance, impact}]}
   created_at timestamptz default now()
 );
 

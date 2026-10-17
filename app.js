@@ -9,7 +9,7 @@ const PAGES = [
   { id: 'recipes',    title: 'Recipes',     sub: 'Drink = ingredient combo → one-cup cost' },
   { id: 'pricing',    title: 'Selling price', sub: 'Menu + margin per drink/size (staff reference)' },
   { id: 'daily-sales', title: 'Daily Sales', sub: 'End-of-day sales + wastage → revenue, COGS, net' },
-  { id: 'inventory',  title: 'Inventory',   sub: 'Remaining stock · reconcile · draw-down · history' },
+  { id: 'inventory',  title: 'Inventory',   sub: 'Stock-take dates · reconcile · ledger balance · history' },
 ];
 
 // ---- gate ----
@@ -225,7 +225,14 @@ async function inventoryRows() {
 }
 
 // Render the aggregated inventory table (shared: M1 §3 compact + M6 §1 full).
-function inventoryTable(items, title = 'Inventory') {
+// ---- R48: optional "Stock Taking update" column (the M6 §1 mockup) ----
+// cellsOut is a truthy array ONLY for M6 §1: it turns the column on (one
+// <input class="field" type="number"> per row, between Remaining and ₱ / OUM)
+// and appends the bottom Total row. M1 §3 calls inventoryTable(invItems) with no
+// third arg, so its output stays byte-identical to what is already verified.
+// Single source of truth: one function, one flag, no second stock aggregation.
+function inventoryTable(items, title = 'Inventory', cellsOut = null) {
+  const withStocktake = Array.isArray(cellsOut);
   const table = document.createElement('table');
   if (title) {
     const cap = document.createElement('caption');
@@ -235,13 +242,17 @@ function inventoryTable(items, title = 'Inventory') {
   }
   const thead = document.createElement('thead');
   const hrow = document.createElement('tr');
-  ['Inventory ID', 'Item', 'UOM', 'Remaining', '₱ / OUM', 'Stock value ₱', 'Low?'].forEach(h => {
+  const headers = ['Inventory ID', 'Item', 'UOM', 'Remaining', '₱ / OUM', 'Stock value ₱', 'Low?'];
+  if (withStocktake) headers.splice(4, 0, 'Stock Taking update');
+  headers.forEach(h => {
     const th = document.createElement('th'); th.textContent = h; hrow.appendChild(th);
   });
   const theadEl = thead; theadEl.appendChild(hrow);
   const tbody = document.createElement('tbody');
+  let stockValueSum = 0;
   for (const it of items) {
     const stockVal = it.remaining * it.rate;
+    stockValueSum += stockVal;
     const tr = document.createElement('tr');
     const cells = [it.code, it.name, it.base_unit, `${it.remaining} ${it.base_unit}`, rate(it.rate), peso(stockVal), it.low ? 'LOW' : ''];
     cells.forEach((val, i) => {
@@ -249,6 +260,32 @@ function inventoryTable(items, title = 'Inventory') {
       if (i === 4 || i === 5) td.className = 'peso';
       if (i === 6 && it.low) { td.className = 'neg'; td.textContent = 'LOW'; }
       else td.textContent = String(val);
+      tr.appendChild(td);
+      // R48: the count cell sits after Remaining (index 3), before ₱ / OUM.
+      if (withStocktake && i === 3) {
+        const cellTd = document.createElement('td');
+        cellTd.className = 'stocktake-cell';
+        const inp = document.createElement('input');
+        inp.className = 'field';
+        inp.type = 'number';
+        inp.setAttribute('placeholder', '—');
+        inp.setAttribute('aria-label', 'Actual count for ' + it.code);
+        cellTd.appendChild(inp);
+        tr.appendChild(cellTd);
+        cellsOut.push({ code: it.code, input: inp });
+      }
+    });
+    tbody.appendChild(tr);
+  }
+  if (withStocktake) {
+    // R48: bottom Total row - stock value = Sum(remaining x rate), 2dp.
+    const tr = document.createElement('tr');
+    tr.className = 'total-row';
+    const totalCells = ['Total', '', '', '', '', '', peso(Math.round(stockValueSum * 100) / 100), ''];
+    totalCells.forEach((val, i) => {
+      const td = document.createElement('td');
+      if (i === 0) td.textContent = String(val);
+      else if (i === 6) { td.className = 'peso'; td.textContent = String(val); }
       tr.appendChild(td);
     });
     tbody.appendChild(tr);
@@ -949,6 +986,99 @@ async function renderPurchases() {
   return sec;
 }
 
+// ---- R47: M6 stock-take ledger math + wire format (backend pass) ----
+// One stocktakes row per DATE: every counted item becomes one lines[] entry, all
+// math computed in the browser BEFORE the write, so the posted/PATCHed body is
+// diffable in devtools (no build step, no linter - this is the verification hook).
+// variance = actual - recorded. `recorded` comes from inventoryRows(), which ALREADY
+// folds the newest actual_oum into `remaining` (app.js:212) - the ledger is applied
+// exactly once, never a second "apply stocktake" pass.
+// impact = |variance| x rate. variance < 0 -> LOST (draw-down on the ledger);
+// variance > 0 -> SAVINGS (surplus found, same math, opposite sign).
+// Wire shape (schema.sql §5; jsonb has no CHECK per migrate_r1.sql:24, so `ledger`
+// is a new key INSIDE totals and is safe - a new TOP-LEVEL key would 400):
+//   { date, counter,
+//     lines:  [{ inventory_code, actual_oum, variance, impact }],
+//     totals: { lost, savings, net,
+//               ledger: [{ inventory_code, variance, impact }] } }
+// id / created_at are server defaults and are never sent.
+function buildStocktakeBody(counts, invItems, date, counter, editingId, existingRows) {
+  // Defensive re-check: the click handler validates first, but a caller that skips
+  // it still cannot post a duplicate date. editingId is the row being edited, so
+  // its own date is not a clash against itself.
+  const dateError = validateStocktakeDate(date, existingRows || [], editingId);
+  if (dateError) return { error: dateError };
+  const round2 = (n) => Math.round(n * 100) / 100;
+  const lines = [];
+  const ledger = [];
+  let lost = 0;
+  let savings = 0;
+  for (const c of counts || []) {
+    if (!c) continue;
+    const want = String(c.code || '').trim().toUpperCase();
+    if (!want) continue;
+    const it = (invItems || []).find((x) => String(x.code || '').trim().toUpperCase() === want);
+    if (!it) continue; // counted something not on the stock table - skip it
+    const actual = Number(c.actual);
+    if (!isFinite(actual)) continue;
+    const variance = actual - Number(it.recorded);
+    const impact = round2(Math.abs(variance) * Number(it.rate));
+    lines.push({ inventory_code: it.code, actual_oum: actual, variance, impact });
+    ledger.push({ inventory_code: it.code, variance, impact });
+    if (variance < 0) lost += impact;
+    else if (variance > 0) savings += impact;
+  }
+  lost = round2(lost);
+  savings = round2(savings);
+  const net = round2(savings - lost);
+  ledger.sort((a, b) => b.impact - a.impact); // biggest impact first
+  return {
+    body: {
+      date,
+      counter,
+      lines,
+      totals: { lost, savings, net, ledger },
+    },
+    preview: { lost, savings, net, lines },
+  };
+}
+
+// R47: date guard - same pattern as M5 (app.js:2745-2790). Returns null when the
+// date is usable, otherwise the user-facing message. One stocktake per date, so a
+// second row for the same day is an edit, never a duplicate.
+function validateStocktakeDate(date, rows, editingId) {
+  const d = String(date || '').trim();
+  if (d === '') return 'Date is required — type the day (YYYY-MM-DD) before saving.';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return 'Date must be YYYY-MM-DD — for example 2026-10-17.';
+  {
+    const dm = d.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const dy = new Date(Number(dm[1]), Number(dm[2]) - 1, Number(dm[3]));
+    const real = dy.getFullYear() === Number(dm[1]) && dy.getMonth() === Number(dm[2]) - 1 && dy.getDate() === Number(dm[3]);
+    if (!real) return 'That date does not exist on a calendar — use a real one, for example 2026-10-17.';
+  }
+  const clash = (rows || []).find((r) => String(r.date || '') === d && String(r.id) !== String(editingId || ''));
+  if (clash) {
+    return `That date is already recorded — ${clash.date} · ${clash.counter || ''}. Edit that row instead of adding a second one.`;
+  }
+  return null;
+}
+
+// R47: read a saved stocktake back into { code: actual_oum } so the Edit control can
+// prefill the count cells (R49). Missing / non-array lines yields an empty map.
+function countedStocktakeOf(row) {
+  const map = {};
+  const lines = row && Array.isArray(row.lines) ? row.lines : [];
+  for (const ln of lines) {
+    if (!ln) continue;
+    const code = String(ln.inventory_code || '').trim().toUpperCase();
+    if (!code) continue;
+    const actual = Number(ln.actual_oum);
+    if (!isFinite(actual)) continue;
+    map[code] = actual;
+  }
+  return map;
+}
+
 // ---- Phase 4: Stock-take reconcile ----
 // variance = actual - on_hand; impact = |variance| x price_per_base.
 // variance < 0 -> LOST cost (amber/red); variance > 0 -> SAVINGS (green).
@@ -964,13 +1094,17 @@ async function renderInventory() {
   sec.id = 'inventory';
   const t = document.createElement('div'); t.className = 'page-title'; t.textContent = 'Inventory';
   const s = document.createElement('div'); s.className = 'page-sub';
-  s.textContent = 'Remaining stock · reconcile record vs actual · draw-down · history';
+  s.textContent = 'Stock-take dates · reconcile · ledger balance · history';
   sec.append(t, s);
 
   let invItems = [];
   let stocktakes = [];
   let sales = [];
   let recipes = [];
+  // R47: the row being edited. A later round (R48) sets this from the per-row Edit
+  // control on the stock-take list; when it is set the save PATCHes that row instead
+  // of POSTing a new one, so editing a date never duplicates it.
+  let editingStocktakeId = null;
   try {
     invItems = await inventoryRows();
     stocktakes = await getData('stocktakes', 'order=created_at.desc&select=*');
@@ -991,12 +1125,18 @@ async function renderInventory() {
   const stockWrap = document.createElement('div'); stockWrap.className = 'card';
   const stockH = document.createElement('div'); stockH.textContent = 'Stock on hand (one row per item — newest purchase sets ₱/OUM)';
   stockWrap.appendChild(stockH);
-  stockWrap.appendChild(inventoryTable(invItems, 'Stock on hand'));
+  // ---- R48: the Stock Taking update column lives inside this table (mockup) ----
+  // countCells collects { code, input } per row so the record form and the per-row
+  // Edit control can read / write the shelf counts. Same table, extra flag only.
+  const countCells = [];
+  // R48: passing countCells is what switches the Stock Taking update column on -
+  // without the third argument inventoryTable renders the M1 §3 layout.
+  stockWrap.appendChild(inventoryTable(invItems, 'Stock on hand — type the shelf count in the Stock Taking update column (saving sets remaining = count)', countCells));
   sec.appendChild(stockWrap);
 
   // ---- §2 reconcile: record vs actual ----
   const recWrap = document.createElement('div'); recWrap.className = 'card';
-  const recH = document.createElement('div'); recH.textContent = 'Reconcile — enter actual count in OUM (saving sets remaining = actual)';
+  const recH = document.createElement('div'); recH.textContent = 'Balance — record vs latest count (variance · impact · status)';
   recWrap.appendChild(recH);
   const rtable = document.createElement('table');
   const rhead = document.createElement('thead');
@@ -1054,16 +1194,123 @@ async function renderInventory() {
   foot.appendChild(mk('Net', net, net < 0 ? 'neg' : 'pos'));
   sec.appendChild(foot);
 
-  // reconcile form: Inventory ID (SC...) + actual OUM + date + counter
+  // ---- R48: stock-take dates list (replaces the paste-the-id delete card) ----
+  // One row per saved stocktake, newest DATE first, styled like the M1/M5 tables
+  // (card head + tbl-caption + scroll-y wrapper). Edit selects that date as the
+  // session under edit and prefills the §1 count cells from countedStocktakeOf;
+  // Delete is the two-click armed pattern copied from M1 (app.js:617) / M5.
+  const stEditHint = document.createElement('div'); stEditHint.className = 'grid-hint';
+  const stDelConfirm = document.createElement('div'); stDelConfirm.className = 'del-confirm';
+  let pendingDelRowId = null;
+  let armedDelBtn = null;
+  if (stocktakes.length) {
+    const stWrap = document.createElement('div'); stWrap.className = 'card';
+    const stH = document.createElement('div');
+    stH.textContent = 'Stock-take dates — edit a date, or delete it';
+    stWrap.appendChild(stH);
+    const stable = document.createElement('table');
+    const stCap = document.createElement('caption');
+    stCap.className = 'tbl-caption';
+    stCap.textContent = 'Stock-take dates';
+    stable.appendChild(stCap);
+    const sthead = document.createElement('thead');
+    const sthrow = document.createElement('tr');
+    ['Date', 'Who', 'Items counted', 'Lost ₱', 'Savings ₱', 'Net ₱', 'Edit', 'Delete'].forEach(h => {
+      const th = document.createElement('th'); th.textContent = h; sthrow.appendChild(th);
+    });
+    sthead.appendChild(sthrow);
+    const stbody = document.createElement('tbody');
+    const newestDateFirst = stocktakes.slice().sort((a, b) =>
+      (String(b.date || '') < String(a.date || '') ? -1 : String(b.date || '') > String(a.date || '') ? 1 : 0));
+    for (const st of newestDateFirst) {
+      const tt = st.totals || {};
+      const stLines = Array.isArray(st.lines) ? st.lines : [];
+      const tr = document.createElement('tr');
+      const dateTd = document.createElement('td');
+      dateTd.textContent = String(st.date || '');
+      tr.appendChild(dateTd);
+      const whoTd = document.createElement('td');
+      whoTd.textContent = String(st.counter || '—');
+      tr.appendChild(whoTd);
+      const cntTd = document.createElement('td');
+      cntTd.className = 'num';
+      cntTd.textContent = String(stLines.length);
+      tr.appendChild(cntTd);
+      [peso(tt.lost || 0), peso(tt.savings || 0), peso(tt.net || 0)].forEach((val) => {
+        const td = document.createElement('td');
+        td.className = 'peso';
+        td.textContent = val;
+        tr.appendChild(td);
+      });
+      // Edit button per row: this date becomes the session under edit, so the
+      // save PATCHes the same row and the §1 cells get that day's counts.
+      const editTd = document.createElement('td');
+      const editBtn = document.createElement('button');
+      editBtn.className = 'btn-edit';
+      editBtn.textContent = 'Edit';
+      editBtn.setAttribute('aria-label', 'Edit stock-take ' + (st.date || String(st.id)));
+      editBtn.addEventListener('click', () => {
+        editingStocktakeId = String(st.id);
+        const counted = countedStocktakeOf(st);
+        for (const cell of countCells) {
+          const saved = counted[cell.code];
+          // empty for codes this stock-take never counted - leave as recorded
+          cell.input.value = (saved == null || !isFinite(Number(saved))) ? '' : String(saved);
+        }
+        stEditHint.textContent = `Editing ${st.date || String(st.id)} (${st.counter || ''}) — the counts above are that day's. Change a cell, then press Record stock-take to save the changes to this date.`;
+        sec.appendChild(stEditHint);
+        updatePreview();
+      });
+      editTd.appendChild(editBtn);
+      tr.appendChild(editTd);
+      // R48: per-row Delete. First click arms a confirm prompt; a second click on
+      // the SAME row's button deletes ONLY that stocktake (id=eq.<rowId>).
+      const delTd = document.createElement('td');
+      const delBtn = document.createElement('button');
+      delBtn.className = 'btn-row-del';
+      delBtn.textContent = 'Delete';
+      delBtn.setAttribute('aria-label', 'Delete stock-take ' + (st.date || String(st.id)));
+      delBtn.addEventListener('click', () => {
+        const rid = String(st.id);
+        if (pendingDelRowId === rid) {
+          deleteData('stocktakes', 'id=eq.' + encodeURIComponent(rid)).then(() => location.reload());
+          return;
+        }
+        if (armedDelBtn && armedDelBtn !== delBtn) {
+          armedDelBtn.textContent = 'Delete';
+          armedDelBtn.classList.remove('armed');
+        }
+        pendingDelRowId = rid;
+        armedDelBtn = delBtn;
+        delBtn.textContent = 'Confirm?';
+        delBtn.classList.add('armed');
+        stDelConfirm.textContent = `Delete this stock-take — ${st.date || String(st.id)} · ${st.counter || ''}? Click "Confirm?" on the same row again to delete.`;
+      });
+      delTd.appendChild(delBtn);
+      tr.appendChild(delTd);
+      stbody.appendChild(tr);
+    }
+    stable.append(sthead, stbody);
+    const stScroll = document.createElement('div');
+    stScroll.className = 'scroll-y';
+    stScroll.appendChild(stable);
+    stWrap.appendChild(stScroll);
+    sec.appendChild(stWrap);
+    sec.appendChild(stDelConfirm);
+  } else {
+    const note = document.createElement('div'); note.className = 'empty-note';
+    note.textContent = 'No stock-takes yet — count the shelf in the column above and press Record stock-take.';
+    sec.appendChild(note);
+  }
+
+  // ---- R49: session card - the counts live in the §1 table, not here ----
+  // Only the date and the counter stay hand-typed; the item and its count come
+  // from every Stock Taking update cell that holds a typed positive number.
   const form = document.createElement('div');
   form.className = 'card';
-  const codeInp = document.createElement('input');
-  codeInp.className = 'field'; codeInp.setAttribute('placeholder', 'Inventory ID (SC…)');
-  codeInp.setAttribute('aria-label', 'Inventory ID');
-  const actualInp = document.createElement('input');
-  actualInp.className = 'field'; actualInp.type = 'number';
-  actualInp.setAttribute('placeholder', 'Actual count in OUM');
-  actualInp.setAttribute('aria-label', 'Actual count in OUM');
+  const formH = document.createElement('div');
+  formH.textContent = 'Stock-take session';
+  form.appendChild(formH);
   const dateInp = document.createElement('input');
   dateInp.className = 'field'; dateInp.setAttribute('placeholder', 'Date (YYYY-MM-DD)');
   dateInp.setAttribute('aria-label', 'Date');
@@ -1071,36 +1318,87 @@ async function renderInventory() {
   counterInp.className = 'field'; counterInp.setAttribute('placeholder', 'Counter initials');
   counterInp.setAttribute('aria-label', 'Counter initials');
   const recBtn = document.createElement('button');
-  recBtn.className = 'btn-record'; recBtn.textContent = 'Record reconcile';
-  form.append(codeInp, actualInp, dateInp, counterInp, recBtn);
+  recBtn.className = 'btn-record'; recBtn.textContent = 'Record stock-take';
+  form.append(dateInp, counterInp, recBtn);
+  // R49: blank cells are not zeros - they leave the item as recorded.
+  const gridHint = document.createElement('div'); gridHint.className = 'grid-hint';
+  gridHint.textContent = 'Blank cells stay as recorded — only the counts you type are saved. Found stock counts as savings, missing stock counts as lost.';
+  form.appendChild(gridHint);
+  // R49: live preview box, same .total-box pattern as M1 §2 (app.js:750-766).
+  const previewBox = document.createElement('div');
+  previewBox.className = 'total-box';
+  const previewLabel = document.createElement('span');
+  previewLabel.textContent = 'Ledger preview: ';
+  const previewVal = document.createElement('span');
+  previewVal.className = 'peso';
+  previewBox.append(previewLabel, previewVal);
+  form.appendChild(previewBox);
   sec.appendChild(form);
 
+  // R49: read every §1 count cell that holds a typed positive number.
+  function collectCounts() {
+    const counts = [];
+    for (const cell of countCells) {
+      const raw = String(cell.input.value || '').trim();
+      if (raw === '') continue;
+      const n = Number(raw);
+      if (!(n > 0)) continue;
+      counts.push({ code: cell.code, actual: n });
+    }
+    return counts;
+  }
+  // R49: the preview reuses buildStocktakeBody's math - the date is a fixed
+  // placeholder and existingRows is empty, so the date guard can never fire and
+  // the previewed numbers do not depend on the date at all.
+  function updatePreview() {
+    const counts = collectCounts();
+    if (!counts.length) { previewVal.textContent = '—'; return; }
+    const built = buildStocktakeBody(counts, invItems, '2000-01-01', '', editingStocktakeId, []);
+    if (built.error) { previewVal.textContent = '—'; return; }
+    const pv = built.preview;
+    previewVal.textContent = `Lost ${peso(pv.lost)} · Savings ${peso(pv.savings)} · Net ${peso(pv.net)}`;
+  }
+  updatePreview();
+  for (const cell of countCells) cell.input.addEventListener('input', updatePreview);
+
+  // ---- R47: reconcile save path is date-keyed and ledger-computed (see buildStocktakeBody).
+  // One stocktakes row per DATE, all counted items in lines[]. The ledger is ADDITIVE
+  // ONLY: this path writes nothing to `purchases` and nothing to `daily_sales`, so
+  // purchase additions and sales draw-downs stay exactly as recorded.
+  // ---- R49: record reads the §1 count cells (no hand-typed item / count) ----
   recBtn.addEventListener('click', () => {
-    const codeKey = codeInp.value.trim().toUpperCase();
-    const actualRaw = actualInp.value.trim();
-    if (!codeKey || actualRaw === '') {
+    const counts = collectCounts();
+    if (!counts.length) {
       const w = document.createElement('div'); w.className = 'neg';
-      w.textContent = 'Pick an item and enter its actual count.';
+      w.textContent = 'Type at least one count in the Stock Taking update column before saving.';
       form.appendChild(w); return;
     }
-    const it = invItems.find(x => x.code === codeKey || x.code.startsWith(codeKey));
-    if (!it) {
+    const date = dateInp.value.trim();
+    const dateErr = validateStocktakeDate(date, stocktakes, editingStocktakeId);
+    if (dateErr) {
       const w = document.createElement('div'); w.className = 'neg';
-      w.textContent = 'No such inventory ID.'; form.appendChild(w); return;
+      w.textContent = dateErr;
+      form.appendChild(w); return;
     }
-    const act = Number(actualRaw);
-    const variance = act - it.recorded;
-    const impact = Math.abs(variance) * it.rate;
-    const line = { inventory_code: it.code, actual_oum: act, variance, impact };
-    const lost = variance < 0 ? impact : 0;
-    const savings = variance > 0 ? impact : 0;
-    const body = {
-      date: dateInp.value.trim() || new Date().toISOString().slice(0, 10),
-      counter: counterInp.value.trim(),
-      lines: [line],
-      totals: { lost, savings, net: savings - lost },
-    };
-    postData('stocktakes', body).then(() => location.reload());
+    const counter = counterInp.value.trim();
+    if (counter === '') {
+      const w = document.createElement('div'); w.className = 'neg';
+      w.textContent = 'Counter initials are required before saving.';
+      form.appendChild(w); return;
+    }
+    const built = buildStocktakeBody(counts, invItems, date, counter, editingStocktakeId, stocktakes);
+    if (built.error) {
+      const w = document.createElement('div'); w.className = 'neg';
+      w.textContent = built.error;
+      form.appendChild(w); return;
+    }
+    // R47: Edit = PATCH the same row (never a duplicate); new date = POST. Writes
+    // return 200/201/204 with an empty body, so postData/patchData are the only
+    // safe helpers - never res.json() on a write.
+    const write = editingStocktakeId
+      ? patchData('stocktakes', 'id=eq.' + encodeURIComponent(editingStocktakeId), built.body)
+      : postData('stocktakes', built.body);
+    write.then(() => location.reload());
   });
 
   // ---- §3 draw-down log: what sold/wasted on the latest recorded day ----
@@ -1216,7 +1514,8 @@ async function renderInventory() {
   }
   sec.appendChild(histWrap);
 
-  addDeleteCard(sec, stocktakes, 'stocktakes', 'Stock-take id (copy from history)');
+  // R48: the paste-the-id delete card is gone - Delete now lives per row in the
+  // stock-take dates table above. addDeleteCard itself is untouched (M1/M5 use it).
   addPrintButton(sec, 'Print inventory sheet');
   return sec;
 }
@@ -1793,8 +2092,8 @@ async function renderOverhead() {
   sec.appendChild(sumCard);
 
   // §2 expense entry form: Expense item · Period (Yearly/Monthly/Daily/Cup) · Amount ₱
-  // R27: mirror the purchases-page UX — two-column field rows (label left, input
-  // right) and a LIVE suggestion box: typing an expense name shows matching rows
+  // R27: mirror the purchases-page UX — two-column field rows (label left,
+  // input right) and a LIVE suggestion box: typing an expense name shows matching rows
   // already in the cost table, so users see e.g. "Rent" exists before adding a duplicate.
   const form = document.createElement('div');
   form.className = 'card';
@@ -1860,7 +2159,7 @@ async function renderOverhead() {
       form.appendChild(w); return;
     }
     // R28 edit mode: an Edit button was clicked, so update THAT row in place —
-    // PATCH the same row (skip the duplicate-label check, the row IS its own label).
+    // PATCH the same row (skip the duplicate-label check, the row IS itself).
     if (overheadEditingRowId) {
       const obj = { label, amount, period };
       patchData('overhead', `id=eq.${encodeURIComponent(overheadEditingRowId)}`, obj)
