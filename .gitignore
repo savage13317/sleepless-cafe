@@ -11,5 +11,12 @@ desktop.ini
 _tmp_*
 *.log
 
+# Local environments / build outputs
+.venv/
+venv/
+node_modules/
+__pycache__/
+*.pyc
+
 # Never commit a real secret key even if one is ever dropped in here
 *secret*key*
