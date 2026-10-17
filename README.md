@@ -14,7 +14,7 @@ pages; sections stack inside each page and the nav bar moves back-and-forth betw
 3. **Recipes** — drink · size · ingredients → one-cup cost, computed live from each item's current **₱/OUM** (free to create, never changes stock).
 4. **Selling price** — menu + margin per drink/size (staff reference; costs are hidden from customers). Margin = sell − (recipe cost + overhead/cup).
 5. **Daily Sales** — record a day: cups sold per recipe + wastage lines in OUM → revenue, COGS, wastage %, net. Selling a cup **draws down** stock; over-sells are flagged, never blocked (a stock-take reconciles later).
-6. **Inventory** — reconcile recorded vs actual → **lost cost / unrecorded savings**; draw-down log + history.
+6. **Inventory** — take stock: type the shelf count against each item (one record per stock-take date, editable and deletable) → reconcile record vs latest count → **lost cost / unrecorded savings** and net; draw-down log + stock-take history.
 
 > The old **Ordering** page is retired — it is replaced by Module 5 (Daily Sales) + Module 6 (Inventory). The `orders` table is no longer read by any page.
 
@@ -22,13 +22,15 @@ Plus a **Dashboard** with summary cards: stock value ₱ · low-stock count · s
 
 ## Current build status
 
-Latest commit (2026-10-15): `origin/main` = **4584a7b** (R39b+R39c — overhead cost table sorted
-alphabetically, pricing form suggests a sell-price range). Best-verified UX checkpoint: **a3962d4**
-(R38b). Modules 1–4 (Purchases, Overhead, Recipes, Selling price) are complete and verified to a
-consistent UX bar — two-column forms, live suggestion/preview boxes, dropdowns of existing data,
-per-row Edit, fresh overhead-per-cup math, no stale globals. Modules 5–6 (Daily Sales, Inventory)
-remain at their plan-phase skeletons; the M5 grid redesign is planned as R40–R44 in `REV_PLAN.md`.
-See `REV_PLAN.md` for the full revision log (R0–R39c).
+Latest commit (2026-10-16): `origin/main` = **8592e0e** (R46–R50 — Inventory rebuilt as a
+stock-take ledger: a Stock Taking update column in the stock table with a Total row, one record
+per stock-take date with per-row Edit and two-click Delete, and a live lost/savings/net preview).
+Earlier checkpoints: **67e6ebe** (R45 — selling-price table sorted A-Z then S/M/L) and **a3962d4**
+(R38b, best-verified UX). Modules 1–5 (Purchases, Overhead, Recipes, Selling price, Daily Sales)
+are complete and verified to a consistent UX bar — two-column forms, live suggestion/preview boxes,
+dropdowns of existing data, per-row Edit, fresh overhead-per-cup math, no stale globals. Module 6
+(Inventory) code is committed and QA-gated, but has not yet been walked through in a browser —
+verify it before treating it as shipped. See `REV_PLAN.md` for the full revision log (R0–R50).
 
 ## Running it locally
 

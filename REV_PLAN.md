@@ -283,7 +283,7 @@ R0, R1, R10, R12 are fast. **R2, R3, R6 are the risky ones** (ID counter, aggreg
 
 ---
 
-## Post-plan revision log (R13 → R45) — sessions 6–8
+## Post-plan revision log (R13 → R50) — sessions 6–9
 
 The plan phases R0–R12 are done; user then drove module-by-module fine-tuning rounds (R13–R38b). Full per-round detail lives in the repo memory file; key milestones:
 
@@ -293,7 +293,8 @@ The plan phases R0–R12 are done; user then drove module-by-module fine-tuning 
 - **R38–R38b — M4 Selling price** (commit a3962d4, pushed f1e7720..a3962d4): `renderPricing()` mirrors M1–M3 UX — fresh overhead per cup, table (Drink/Size/Recipe cost/Overhead per cup/All-in cost/Sell price/Margin/Edit, no id, scroll-y + caption), per-row Edit (PATCH same pricing row), recipe-dropdown form with live margin-preview box, NO Delete column (recipe deletion stays in the Recipes tab), table sorted by margin highest→lowest (unsold rows last) — **sort superseded by R45, see below**.
 - **R39–R39c — post-checkpoint polish** (commit 4584a7b, pushed): M2 overhead period/cost table sorted alphabetically; M4 sell-price form suggests a sane sell range (all-in ÷ 0.8 → all-in ÷ 0.6). `origin/main` = **4584a7b**.
 - **R40–R44 — M5 Daily Sales grid redesign** (plan written this session; R40–R41 code shipped in `0a51c32`): see the plan section below.
-- **R45 — M4 Selling price sort** (this session): `renderPricing()` table order changed from margin-descending to **A–Z by drink name, then S · M · L** — `sizeRank = { S: 0, M: 1, L: 2 }` with `localeCompare(name, undefined, true)` (case-insensitive), mirroring the alphabetical M2 table from R39b. The sell-price `<select>` uses the same comparator so the dropdown mirrors the table top-to-bottom (it previously sorted `Drink (Size)` by plain label, which ordered sizes L, M, S); `option.value` stays `drink||size`, so Edit/POST/PATCH round-tripping is unchanged. Caption now states the order. No fallback rank added — sizes are schema-enforced (`schema.sql`: `check (size in ('S','M','L'))`), so bad data surfaces instead of being hidden. The Margin column is still displayed; it is no longer the sort key.
+- **R45 — M4 Selling price sort** (this session, commit `67e6ebe`, pushed `ca940c6..67e6ebe`): `renderPricing()` table order changed from margin-descending to **A–Z by drink name, then S · M · L** — `sizeRank = { S: 0, M: 1, L: 2 }` with `localeCompare(name, undefined, true)` (case-insensitive), mirroring the alphabetical M2 table from R39b. The sell-price `<select>` uses the same comparator so the dropdown mirrors the table top-to-bottom (it previously sorted `Drink (Size)` by plain label, which ordered sizes L, M, S); `option.value` stays `drink||size`, so Edit/POST/PATCH round-tripping is unchanged. Caption now states the order. No fallback rank added — sizes are schema-enforced (`schema.sql`: `check (size in ('S','M','L'))`), so bad data surfaces instead of being hidden. The Margin column is still displayed; it is no longer the sort key.
+- **R46–R50 — M6 Inventory stock-take ledger** (plan + code this session): M6 rebuilt around **inventory taking** and **balance**. `inventoryTable()` gained a third optional arg `cellsOut` that switches on a `Stock Taking update` input column (between `Remaining` and `₱ / OUM`) plus a bottom `Total` row — M1 §3 still calls it with one arg, so the Purchases page is byte-identical. Module-level helpers `buildStocktakeBody` / `validateStocktakeDate` / `countedStocktakeOf`; one `stocktakes` row per **date** with all counted items in `lines[]`; `totals` gained `ledger[]` **inside** `totals`. Per-row **Edit** (PATCH same row, prefills that date's counts) and **two-click armed Delete** replace the paste-the-id `addDeleteCard` call (the shared function itself untouched). Live `.total-box` preview recomputed on every cell `input`. `styles.css` gained `.stocktake-cell` / `.total-row` + a print rule that keeps the count column as an outlined box. `schema.sql §5` comment corrected to the real wire keys (`inventory_code`, `actual_oum`, `ledger`). QA caught one regression — the §3 draw-down log had `consumedByCode[c] =` where `consumed[c] =` belonged (out of scope, `ReferenceError`, silently blanked the whole module through `showModule`'s catch) — fixed, gate re-run **PASS**.
 
 ---
 
@@ -406,3 +407,161 @@ The plan phases R0–R12 are done; user then drove module-by-module fine-tuning 
 4. **`reason` is free text today** and nothing filters it. Narrowing M5 to spill means writing `reason: 'spill'` — keep the key, since history rendering and future reconciliation may read it.
 5. **`recById` is built from `recipes` by `id`; the grid dropdown gives names.** Resolve name+size → recipe row first (`drink||size` key, same as `app.js:2009`), then take its `id` for `lines[].recipe_id`.
 6. **No build step, no linter, no tests.** Verification = reproduce the worked example in the browser and diff the posted JSON body.
+
+---
+
+# M6 Inventory — stock-take ledger plan (R46 → R50)
+
+**Why this round exists:** M6 is still the R9 skeleton. Its reconcile form makes the user hand-type an
+**Inventory ID (SC…)** per save (`app.js:1160`), posts **one line per save**, has **no Edit**, a
+**single-click Delete** (`addDeleteCard`, `app.js:374`), an optional/unvalidated date, and no live
+preview. That is the same copy-paste disease M5 had before R40. The user's ask: **inventory taking**
+(count the shelf) and **balance** (the count becomes the ledger's remaining for that date).
+
+**Decisions locked (user, session 9 — mockup + answers, verbatim intent):**
+
+1. **The grid lives inside the §1 stock table.** A `Stock Taking update` column sits between
+   `Remaining` and `₱ / OUM`, one input cell per item row (see mockup). No separate grid card.
+2. **One column per row** — the actual count in that item's OUM. No reason/note column.
+3. **The encoded amount overrides the remaining balance as of that date.** It does **not** mutate
+   `purchases` rows and does **not** touch the draw-downs produced by `daily_sales`. It is a
+   **ledger entry**: negative variance = **lost item** (a draw-down on the ledger), positive
+   variance = **surplus / income item**.
+4. **Both directions allowed** — found stock counts as savings, same math, opposite sign.
+5. **A list of stock-take dates**, each row editable and deletable **like M1–M5** (per-row Edit =
+   PATCH same row; two-click armed Delete).
+
+**Wire format must not drift (`schema.sql §5`, `inventoryRows()` at `app.js:205–212`):**
+
+`stocktakes = { date, counter, lines:[{inventory_code, actual_oum, variance, impact}], totals:{lost,savings,net} }`
+
+`inventoryRows()` reads `lines[].inventory_code` + `lines[].actual_oum` and takes the **newest**
+value per code (`created_at desc`), so `remaining = actual` already holds for multi-line stocktakes.
+New keys **inside** `totals` are safe (no CHECK on the jsonb); unknown **top-level** keys would 400.
+
+---
+
+## R46 — M6 nav entry (mirrors R1 / R19 / R26 / R33 / R40) — **DONE**
+
+**Goal:** the nav line describes the new model.
+
+- `PAGES` entry `app.js:12` sub → `Stock-take dates · reconcile · ledger balance · history`.
+- Also re-pointed the in-page `page-sub` inside `renderInventory()` (it carries its own copy) and the §2 card head, which still said "enter actual count in OUM" — the counts no longer live in a form.
+- `sessionStorage slc_view` already restores this module after a reload — no change.
+- Render order in `buildSite()` stays purchases → overhead → recipes → pricing → daily-sales → inventory.
+
+**Unlocks:** R47.
+**Agent:** **frontend-lead** (nav copy only). **Shipped by backend-lead alongside R47 — copy-only, verified by read.**
+
+---
+
+## R47 — Ledger math + wire format (mirrors R3 / R15 / R28 / R35 / R42) — **backend first** — **DONE**
+
+**Goal:** one `stocktakes` row per **date**, all counted items in `lines[]`, computed in the browser
+before the POST.
+
+- `lines[]` = one entry per counted item: `{ inventory_code, actual_oum, variance, impact }` where
+  `variance = actual_oum − recorded` (`recorded` from `inventoryRows()`) and `impact = |variance| × rate`.
+- `totals` = `{ lost, savings, net }` — `lost` = Σ impact where variance < 0, `savings` = Σ impact
+  where variance > 0, `net = savings − lost`. Keep those three keys; §4 history reads them.
+- Add `ledger: [{ inventory_code, variance, impact }]` **inside `totals`** for the ledger list
+  (new key, safe — no CHECK). Never add a top-level key.
+- Date: **required**, `YYYY-MM-DD`, calendar-real, and **unique** across `stocktakes` (same guard
+  pattern as `app.js:2745–2790` in M5). Counter initials **required**.
+- Save path: `editingStocktakeId ? patchData('stocktakes', 'id=eq.…', body) : postData('stocktakes', body)`,
+  then `location.reload()`. Never `res.json()` on a write.
+- Editing a stock-take must **not** re-post `daily_sales` lines or `purchases` — the ledger is additive
+  only; sales draw-downs and purchase additions stay exactly as recorded.
+
+**Unlocks:** R48, R49.
+**Agent:** **backend-lead** — verify before any layout pass (SOP: sequential handoffs).
+**Delivered:** `buildStocktakeBody` `app.js:968–1008`, `validateStocktakeDate` `1012–1028`, `countedStocktakeOf` `1031–1044`; `renderInventory()` moved `962 → 1055`. Verified by direct read before the frontend pass.
+
+---
+
+## R48 — §1 stock table + stock-take list (mirrors R4 / R16 / R29 / R36 / R43) — **DONE**
+
+**Goal:** the mockup. `inventoryTable()` gains an optional stock-take column; M1 §3 stays compact.
+
+- `inventoryTable(items, title, cellsOut = null)` — the third arg is an **array**, not an options object:
+  passing it switches the column on and receives `{ code, input }` per row. The return type stays a
+  `<table>` element, which is what keeps both call sites working (`app.js:676` passes one arg, M6 §1
+  passes three). Returning `{ table, cells }` would have broken M1 §3.
+- Column order per mockup: `Inventory ID · Item · UOM · Remaining · Stock Taking update · ₱ / OUM ·
+  Stock value ₱ · Low?`.
+- **Total row** at the bottom: `Total` + stock value Σ(remaining × rate) (mockup shows ₱1,217.46).
+- Stock-take **list table**: `Date · Who · Items counted · Lost ₱ · Savings ₱ · Net ₱ · Edit · Delete`,
+  newest date first, `scroll-y` wrapper + caption, per-row Edit (selects that date as the form's
+  session) and **two-click armed Delete** (same pattern as M1 `app.js:617` / M5 `app.js:2560`).
+- Drop `addDeleteCard(sec, stocktakes, …)` — the per-row card replaces the paste-the-id card.
+
+**Unlocks:** R49.
+**Agent:** **frontend-lead**. **Delivered:** `inventoryTable` `234–296`, list table `1195–1301`.
+**Caught in review:** the §1 call was shipped **without** the third argument, so the column, the
+`countCells`, the prefill and the preview were all dead — fixed before QA ran.
+
+---
+
+## R49 — Grid UX + live preview (mirrors R2 / R14 / R27 / R34 / R41) — **DONE**
+
+**Goal:** counting the shelf is typing into the table.
+
+- **Correction to this line as shipped:** opening the page leaves the cells **empty** (the mockup shows
+  empty boxes); the counts are prefilled only when a row's **Edit** button is pressed, from
+  `countedStocktakeOf(row)`. Prefilling on open would silently re-post the previous day's counts under
+  a new date. Blank cell = "leave as recorded", never zero.
+- `Record stock-take` button (`.btn-record`) reads every cell, skips blanks and non-positive values,
+  and shows a **live preview box** under the table: `Lost ₱ · Savings ₱ · Net ₱` recomputed on `input`.
+- Validation messages use `.neg` divs appended to the card, same tone as M5.
+- ~30 counted items is the whole shelf — the table is scroll-y, no row cap needed beyond that.
+- Fresh local rate lookup from `inventoryRows()` — **do not** read the module-level
+  `OVERHEAD_PER_CUP` global (R34 gotcha).
+
+**Unlocks:** R50.
+**Agent:** **frontend-lead**. **Delivered:** session card + preview `1304–1360`, `recBtn` handler
+rewritten to read the cells (`1366–1400`).
+
+---
+
+## R50 — Polish + verification (mirrors R11 / R37–R39c / R44) — **DONE (code gate; browser steps pending user)**
+
+- Sort stock-take list newest-date-first; ledger rows inside a session by biggest impact first.
+- Print sheet: `Print inventory sheet` already exists — confirm the stock-take column prints
+  (`styles.css:200` print block hides inputs; the column must stay legible).
+- **QA gate (qa-engineer, run last, do not skip):** at `:8731/?v=46#inventory`
+  1. count SC0001 = 4000 ml on a new date → confirm `remaining` becomes 4000 ml, and
+     `purchases` rows + `daily_sales` draw-downs are **unchanged** (the ledger is additive only);
+  2. confirm `Total lost / savings / net` agree with the ledger lines;
+  3. Edit that date to 4090 → confirm PATCH (same row id), no duplicate row;
+  4. two-click Delete → confirm 204 + row gone;
+  5. confirm M1 §3 stock table still renders **without** the new column and its stock value still
+     matches M6 §1 (the shared-function regression that matters).
+- Docs: append this round to the revision log; **code commit separate from docs commit**.
+
+**Done-when:** M6 verified at `:8731/?v=46#inventory`; `git status` clean; both commits pushed;
+`origin/main` = new code SHA.
+
+---
+
+## M6 gotchas (verified against current code — read before coding)
+
+1. **`inventoryTable()` is shared with M1 §3** (`app.js:639`). Adding the stock-take column
+   unconditionally puts input boxes on the Purchases page too. Gate it behind an `opts` flag.
+2. **`inventoryRows()` already folds the newest `actual_oum` into `remaining`** (`app.js:212`).
+   Do not write a second "apply stocktake" pass — that double-applies the ledger.
+3. **`stocktakes.lines[]` is read by two consumers** — `inventoryRows()` (`app.js:205`) and §4
+   history (`app.js:1200`). Renaming `actual_oum` or `inventory_code` silently unbalances the app.
+4. **`addDeleteCard` is single-click** (`app.js:374`) and is used by M6 today. M1–M5 use the two-click
+   armed delete; M6 must match, so the shared card stays for other pages and M6 gets per-row controls.
+5. **No CHECK on the jsonb columns** (`migrate_r1.sql:24` pattern) — new keys inside `totals` are
+   safe, new **top-level** keys 400.
+6. **No build step, no linter, no tests.** Verification = reproduce the worked example in the browser
+   and diff the posted/PATCHed JSON body.
+7. **`node --check` is not a runtime check.** The §3 draw-down log shipped `consumed[c] || (consumedByCode[c] = …)`
+   — a copy slip from `backgroundDrawDown()` (`app.js:2703`). Syntax clean, but a `ReferenceError` at
+   runtime, swallowed by `showModule()`'s `catch`, so the whole Inventory page rendered blank. Scope
+   bugs in DOM builders need a runtime repro, not a parse check.
+8. **`inventoryTable()` column indices are positional.** The row `cells` array stays 7 entries and the
+   count `<td>` is spliced inside the loop at `i === 3`; the peso classes (`i === 4 || i === 5`) and the
+   LOW class (`i === 6`) still index the **base** array, not the rendered row. The `total-row` has 8 cells
+   and its peso value sits at index 6.
