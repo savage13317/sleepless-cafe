@@ -7,7 +7,7 @@ Same discipline as before: every phase ends with a checkpoint that must pass bef
 **Baseline at time of writing:** `origin/main` = `7c4bdc6`; `app.js` has an **uncommitted local edit**
 (restock card removed, never pushed). `MODULE1-webpage1.md` untracked. Fix this in R0 before anything else.
 
-**Status tracker:** R0 ✅ · R1 ✅ · R2 ✅ · R3 ✅ · R4 ✅ · R5 ✅ · R6 ✅ · R7 ✅ (verified, no code change — already wired by R5+R6) · R8 ✅ · R9 ✅ (5c768f1 — verified: Coffee SC0003 actual 1700 → variance −100, impact −₱50.00 LOST, footer Total lost ₱50.00 / savings ₱0.00 / Net ₱-50.00, §1 stock table remaining 1700 g; M1 §3 stock value card followed ₱985.00→₱935.00 via shared inventoryRows()) · R10 ✅ (2065f1e — verified: nav = Dashboard + exactly 6 module titles in module order (Purchases, Overhead, Recipes, Selling price, Daily Sales, Inventory; overhead before pricing); no ordering/orders refs; dashboard cards = Stock value ₱985.00 / Low-stock 0 / Sales recorded this month 0; get_errors clean) · R11 ✅ (2df962a — verified: UOM dropdown shows ml/mg/g/pc/kg; per-OUM figures use rate() (₱0.045/₱0.038/₱0.50), totals use peso() (₱45.00/₱900.00); print buttons on inventory + daily-sales; mobile 390px screenshot shows stacked nav + horizontal-scroll tables; README/PLAN/DEV_PLAN updated to 6-module map + Ordering-retired note + latest-cost-wins caveat; get_errors clean) · R12 ✅ (pushed c53ba3c..ac2b582; Pages build status=built at ac2b582 — verified: live Pages app.js serves new 6-module code (daily-sales, renderInventory, renderDailySales, UOM ml/mg/g/pc/kg, Ordering retired) via curl; gate on live URL blocks w/o passphrase, rejects wrong pass, unlocks on 'sleepless'; seed data renders ₱985.00. Privacy unchanged: repo public, URL unlisted, noindex/nofollow, only publishable key in code, secret never committed. NOTE: integrated-browser tool serves a stale cached app.js — curl + Pages build status are authoritative.) — ALL PHASES R0–R12 COMPLETE.
+**Status tracker:** R0 ✅ · R1 ✅ · R2 ✅ · R3 ✅ · R4 ✅ · R5 ✅ · R6 ✅ · R7 ✅ (verified, no code change — already wired by R5+R6) · R8 ✅ · R9 ✅ (5c768f1 — verified: Coffee SC0003 actual 1700 → variance −100, impact −₱50.00 LOST, footer Total lost ₱50.00 / savings ₱0.00 / Net ₱-50.00, §1 stock table remaining 1700 g; M1 §3 stock value card followed ₱985.00→₱935.00 via shared inventoryRows()) · R10 ✅ (2065f1e — verified: nav = Dashboard + exactly 6 module titles in module order (Purchases, Overhead, Recipes, Selling price, Daily Sales, Inventory; overhead before pricing); no ordering/orders refs; dashboard cards = Stock value ₱985.00 / Low-stock 0 / Sales recorded this month 0; get_errors clean) · R11 ✅ (2df962a — verified: UOM dropdown shows ml/mg/g/pc/kg; per-OUM figures use rate() (₱0.045/₱0.038/₱0.50), totals use peso() (₱45.00/₱900.00); print buttons on inventory + daily-sales; mobile 390px screenshot shows stacked nav + horizontal-scroll tables; README/PLAN/DEV_PLAN updated to 6-module map + Ordering-retired note + latest-cost-wins caveat; get_errors clean) · R12 ✅ (pushed c53ba3c..ac2b582; Pages build status=built at ac2b582 — verified: live Pages app.js serves new 6-module code (daily-sales, renderInventory, renderDailySales, UOM ml/mg/g/pc/kg, Ordering retired) via curl; gate on live URL blocks w/o passphrase, rejects wrong pass, unlocks on 'sleepless'; seed data renders ₱985.00. Privacy unchanged: repo public, URL unlisted, noindex/nofollow, only publishable key in code, secret never committed. NOTE: integrated-browser tool serves a stale cached app.js — curl + Pages build status are authoritative.) — ALL PHASES R0–R12 COMPLETE. · M5: R40 ✅ (verified live at :8731 — nav + Daily Sales entry render, no console errors) · R41 🟡 code in place (grid DOM + `.field` selects + disabled-cell styling + backend cell predicate; `form` reverted to `div` and `sizes = ['S','M','L']` added after subagent defects), browser done-when check and code commit still pending — terminal disabled, so no `git`/`curl` this turn.
 Live state after R3: `purchases` = 3 seed rows (SC0001/2/3), `settings.next_inventory_seq` = 5,
 `target_daily_cups` = 100, `daily_sales` empty. R3 checkpoint note: plan text says "₱0.052" but
 ₱52 ÷ (2×250 ml = 500 ml) is genuinely **₱0.104/ml** — arithmetic slip in the plan; the logic
@@ -342,7 +342,7 @@ The plan phases R0–R12 are done; user then drove module-by-module fine-tuning 
 
 **Unlocks:** R42.
 
-**Agent:** **Frontend Division** (grid DOM, `.field` selects, disabled-cell styling, two-column rows, accessibility labels) — heaviest item, ~2 h. Hand off the cell-enable predicate to Backend, not the math.
+**Agent:** **frontend-lead** (grid DOM, `.field` selects, disabled-cell styling, two-column rows, accessibility labels) — heaviest item, ~2 h. Hand off the cell-enable predicate to Backend, not the math.
 
 ---
 
@@ -360,7 +360,7 @@ The plan phases R0–R12 are done; user then drove module-by-module fine-tuning 
 
 **Unlocks:** R43.
 
-**Agent:** **Backend Division** (grid→row compilation, recipe expansion, totals, POST body) — highest-risk item; the recipe-expansion step is where a wrong OUM silently corrupts Inventory.
+**Agent:** **backend-lead** (grid→row compilation, recipe expansion, totals, POST body) — highest-risk item; the recipe-expansion step is where a wrong OUM silently corrupts Inventory.
 
 ---
 
@@ -377,7 +377,7 @@ The plan phases R0–R12 are done; user then drove module-by-module fine-tuning 
 
 **Unlocks:** R44.
 
-**Agent:** **Frontend Division** (table render, scroll-y + caption, live box, Edit/Delete rows) — ~1 h.
+**Agent:** **frontend-lead** (table render, scroll-y + caption, live box, Edit/Delete rows) — ~1 h.
 
 ---
 
@@ -392,7 +392,7 @@ The plan phases R0–R12 are done; user then drove module-by-module fine-tuning 
 
 **Done-when:** M5 verified at `:8731/?v=46#daily-sales`; `git status` clean; code commit and docs commit pushed; `origin/main` = new code SHA.
 
-**Agent:** **QA Division** (terminal build check, live-example reproduction, Inventory regression check, git hygiene) — run last, do not skip.
+**Agent:** **qa-engineer** (terminal build check, live-example reproduction, Inventory regression check, git hygiene) — run last, do not skip.
 
 ---
 

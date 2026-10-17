@@ -614,7 +614,7 @@ async function renderPurchases() {
       armedDelBtn = delBtn;
       delBtn.textContent = 'Confirm?';
       delBtn.classList.add('armed');
-      delConfirm.textContent = `Delete this purchase — ${dateStr} · ${r.inventory_code || '—'} ${r.name || ''} · ${totalUom} ${r.base_unit}? Click "Confirm?" on the same row again to delete just this line. Clicking another row's Delete cancels.`;
+      delConfirm.textContent = `Delete this purchase — ${dateStr} · ${r.inventory_code || '—'} ${r.name || ''} · ${totalUom} ${r.base_unit}? Click "Confirm?" on the same row again to delete.`;
     });
     delTd.appendChild(delBtn);
     tr.appendChild(delTd);
@@ -1171,8 +1171,10 @@ async function renderInventory() {
   sec.appendChild(drawWrap);
 
   // ---- §4 history: past stock-takes + past daily-sales records ----
-  const histWrap = document.createElement('div'); histWrap.className = 'card';
-  const histH = document.createElement('div'); histH.textContent = 'History — stock-takes + daily-sales records';
+  const histWrap = document.createElement('div');
+  histWrap.className = 'card';
+  const histH = document.createElement('div');
+  histH.textContent = 'History — stock-takes + daily-sales records';
   histWrap.appendChild(histH);
   const htable = document.createElement('table');
   const hh = document.createElement('tr');
@@ -1358,8 +1360,8 @@ async function renderRecipes() {
       });
       editTd.appendChild(editBtn);
       tr.appendChild(editTd);
-      // Per-row Delete: first click arms a "Confirm?" prompt; second click on the
-      // SAME row deletes only that recipe (id=eq.<rowId>) — other rows untouched.
+      // Per-row Delete: first click arms a "Confirm?" prompt; a second click on the
+      // SAME row's button deletes only that recipe (id=eq.<rowId>) — other rows untouched.
       const delTd = document.createElement('td');
       const delBtn = document.createElement('button');
       delBtn.className = 'btn-row-del';
@@ -2296,50 +2298,286 @@ async function renderDailySales() {
   }
   function sellPriceOf(rc) { return sellByKey[`${rc.drink_name}||${rc.size}`]; }
 
-  // §6 history of past days (newest first)
+  // ---- R41 Backend handoff: dropdown list + cell-enable predicate + spill expansion ----
+  const drinkOptions = [];
+  const _seenDrink = new Set();
+  for (const rc of recipes) {
+    const name = String(rc.drink_name || '').trim();
+    if (!name || _seenDrink.has(name.toLowerCase())) continue;
+    _seenDrink.add(name.toLowerCase());
+    drinkOptions.push(name);
+  }
+  function cellRecipe(drinkName, size) {
+    const want = String(drinkName || '').trim().toLowerCase();
+    for (const rc of recipes) {
+      if (String(rc.drink_name || '').trim().toLowerCase() !== want) continue;
+      if (String(rc.size || '') !== String(size || '')) continue;
+      return rc;
+    }
+    return null;
+  }
+  function cellPriced(rc) {
+    if (!rc) return false;
+    return Number.isFinite(sellByKey[`${rc.drink_name}||${rc.size}`]);
+  }
+  function spillToWastageLines(rc, cups) {
+    if (!rc || !Array.isArray(rc.ingredients)) return [];
+    const n = Number(cups);
+    if (!(n > 0)) return [];
+    const out = [];
+    for (const ln of rc.ingredients) {
+      if (!ln) continue;
+      const code = String(ln.inventory_code || '').trim().toUpperCase();
+      const qty = Number(ln.qty_oum);
+      if (!code || !(qty > 0)) continue;
+      out.push({ inventory_code: code, qty_oum: qty * n, reason: 'spill' });
+    }
+    return out;
+  }
+
+  // ---- R41 Backend handoff: edit-an-existing-day controller + background draw-down ----
+  // The Edit button opens a saved day; null means "new day → POST". Editing PATCHes
+  // that row instead of appending, so a day is never duplicated on the wire.
+  let editingDayId = null;
+  let editingDay = null;
+
+  // Reconstruct a saved day's lines as ONE row per drink, quantities indexed by size
+  // position (0=S, 1=M, 2=L), so editing shows a single grid row per drink.
+  function daySaleRows(ds) {
+    const sizeIdx = { S: 0, M: 1, L: 2 };
+    const rows = [];
+    const at = {};
+    let unmapped = 0;
+    for (const ln of (ds.lines || [])) {
+      const rc = recById[String(ln.recipe_id)];
+      if (!rc) { unmapped++; continue; }
+      const drink = String(rc.drink_name || '');
+      const size = String(rc.size || ln.size || '');
+      const qty = Number(ln.qty);
+      let i = at[drink];
+      if (i == null) {
+        i = rows.length;
+        at[drink] = i;
+        rows.push({ drink, qtyBySize: [0, 0, 0] });
+      }
+      const col = sizeIdx[size];
+      if (col != null) rows[i].qtyBySize[col] += qty;
+    }
+    return { rows, unmapped };
+  }
+
+  // Saved spill cups (drink-level) for the Edit prefill. Legacy days have no
+  // totals.spill_cells, so they return null — the caller keeps the old preserve path.
+  function daySpillRows(ds) {
+    const cells = ds.totals && Array.isArray(ds.totals.spill_cells) ? ds.totals.spill_cells : null;
+    if (cells == null) return null;
+    const sizeIdx = { S: 0, M: 1, L: 2 };
+    const rows = [];
+    const at = {};
+    for (const ln of cells) {
+      const rc = recById[String(ln.recipe_id)];
+      if (!rc) continue;
+      const drink = String(rc.drink_name || '');
+      let i = at[drink];
+      if (i == null) {
+        i = rows.length;
+        at[drink] = i;
+        rows.push({ drink, qtyBySize: [0, 0, 0] });
+      }
+      const col = sizeIdx[String(ln.size || '')];
+      if (col != null) rows[i].qtyBySize[col] += Number(ln.qty);
+    }
+    return rows;
+  }
+
+  // Background draw-down (pure compute, no DOM): expand each sale line through its
+  // recipe and add each wastage line's OUM, then report ONLY the ingredients that
+  // would go negative. The page no longer renders the full stock table — this
+  // oversold signal is the single honest read-out.
+  function backgroundDrawDown(lines, wastage) {
+    const consumedByCode = {};
+    for (const ln of lines) {
+      const rc = recById[String(ln.recipe_id)];
+      if (!rc || !Array.isArray(rc.ingredients)) continue;
+      const qty = Number(ln.qty);
+      for (const ing of rc.ingredients) {
+        if (!ing) continue;
+        const code = String(ing.inventory_code || '').trim().toUpperCase();
+        const per = Number(ing.qty_oum);
+        if (!code || !(per > 0)) continue;
+        consumedByCode[code] = (consumedByCode[code] || 0) + per * qty;
+      }
+    }
+    for (const w of wastage) {
+      const code = String(w.inventory_code || '').trim().toUpperCase();
+      const qty = Number(w.qty_oum);
+      if (!code || !(qty > 0)) continue;
+      consumedByCode[code] = (consumedByCode[code] || 0) + qty;
+    }
+    const oversold = [];
+    for (const it of invItems) {
+      const consumed = consumedByCode[it.code] || 0;
+      const projected = it.remaining - consumed;
+      if (projected < 0) {
+        oversold.push({ code: it.code, name: it.name, base_unit: it.base_unit, remaining: it.remaining, consumed, projected });
+      }
+    }
+    return oversold;
+  }
+
+  // Single source of truth for the daily_sales wire shape — POST and PATCH share it.
+  function dayBody(date, recorder, lines, wastage, totals) {
+    return { date: date || null, recorder, lines, wastage, totals };
+  }
+
+  // §6 history of past days (newest first) — per-row Edit + two-click per-row Delete,
+  // mirroring Module 1's table anatomy.
+  let pendingDelRowId = null;
+  let armedDelBtn = null;
+  const delConfirm = document.createElement('div');
+  delConfirm.className = 'del-confirm';
+  const editHint = document.createElement('div');
+  editHint.className = 'grid-hint';
+  const editWarn = document.createElement('div');
+  editWarn.className = 'neg';
   if (sales.length) {
     const hist = document.createElement('div');
     hist.className = 'card';
-    const ht = document.createElement('div'); ht.textContent = 'Recorded days';
+    const ht = document.createElement('div');
+    ht.textContent = 'Recorded days';
     hist.appendChild(ht);
+    sec.appendChild(hist);
+    const table = document.createElement('table');
+    const cap = document.createElement('caption');
+    cap.className = 'tbl-caption';
+    cap.textContent = 'Recorded days';
+    table.appendChild(cap);
+    const thead = document.createElement('thead');
+    const hrow = document.createElement('tr');
+    ['Date', 'Recorder', 'Sales', 'Spill cost ₱', 'Rev ₱', 'COGS ₱', 'Net ₱', 'Edit', 'Delete'].forEach(h => {
+      const th = document.createElement('th'); th.textContent = h; hrow.appendChild(th);
+    });
+    thead.appendChild(hrow);
+    const tbody = document.createElement('tbody');
     for (const ds of sales.slice(0, 8)) {
       const tt = ds.totals || {};
-      const line = document.createElement('div');
-      line.textContent = `id ${String(ds.id).slice(0, 8)} — ${ds.date || ''} — ${ds.recorder || ''} — Rev ${peso(tt.revenue)} · COGS ${peso(tt.cogs)} · Net ${peso(tt.net)}`;
-      hist.appendChild(line);
+      const tr = document.createElement('tr');
+      const dateTd = document.createElement('td');
+      dateTd.textContent = ds.date || '';
+      tr.appendChild(dateTd);
+      const recTd = document.createElement('td');
+      recTd.textContent = ds.recorder || '';
+      tr.appendChild(recTd);
+      const dc = daySaleRows(ds);
+      const salesTd = document.createElement('td');
+      salesTd.textContent = dc.rows.length
+        ? dc.rows.map((r) => {
+            const parts = [];
+            for (let i = 0; i < 3; i++) if (r.qtyBySize[i] > 0) parts.push(`${['S', 'M', 'L'][i]}${r.qtyBySize[i]}`);
+            return parts.length ? `${r.drink} ${parts.join(' ')}` : r.drink;
+          }).join(' · ')
+        : '—';
+      tr.appendChild(salesTd);
+      const spillTd = document.createElement('td');
+      spillTd.className = 'peso';
+      const spillCost = Number(tt.wastage);
+      spillTd.textContent = Number.isFinite(spillCost) ? peso(spillCost) : '—';
+      tr.appendChild(spillTd);
+      [peso(tt.revenue), peso(tt.cogs), peso(tt.net)].forEach((val) => {
+        const td = document.createElement('td');
+        td.className = 'peso';
+        td.textContent = val;
+        tr.appendChild(td);
+      });
+      // Edit button per row: opens this saved day into the grids below (prefill only).
+      const editTd = document.createElement('td');
+      const editBtn = document.createElement('button');
+      editBtn.className = 'btn-edit';
+      editBtn.textContent = 'Edit';
+      editBtn.setAttribute('aria-label', 'Edit day ' + (ds.date || String(ds.id)));
+      editBtn.addEventListener('click', () => {
+        editingDayId = String(ds.id);
+        editingDay = ds;
+        dateInp.value = ds.date || '';
+        recInp.value = ds.recorder || '';
+        salesGrid.clearRows();
+        const dayRows = daySaleRows(ds);
+        for (const r of dayRows.rows) {
+          if (salesGrid.rows.length >= MAX_GRID_ROWS) break;
+          const row = salesGrid.addRow();
+          row.sel.value = r.drink;
+          for (let i = 0; i < 3; i++) {
+            if (r.qtyBySize[i] > 0) row.cells[i].value = String(r.qtyBySize[i]);
+          }
+        }
+        spillGrid.clearRows();
+        const savedSpills = daySpillRows(ds);
+        if (savedSpills != null) {
+          for (const r of savedSpills) {
+            if (spillGrid.rows.length >= MAX_GRID_ROWS) break;
+            const row = spillGrid.addRow();
+            row.sel.value = r.drink;
+            for (let i = 0; i < 3; i++) {
+              if (r.qtyBySize[i] > 0) row.cells[i].value = String(r.qtyBySize[i]);
+            }
+          }
+        }
+        if (dayRows.unmapped > 0) {
+          editWarn.textContent = `${dayRows.unmapped} line(s) on this day reference a deleted recipe — they stay saved but cannot be edited.`;
+          sec.appendChild(editWarn);
+        } else {
+          editWarn.textContent = '';
+        }
+        editHint.textContent =
+          savedSpills != null
+            ? 'Both grids now hold this saved day — sales in one row per drink, spills in the Spill grid. Change cups, then press Record day to save the changes.'
+            : ((ds.wastage || []).length
+              ? 'Grids hold this saved day. Its spills were saved before cup-level tracking existed, so they stay as recorded — type cups into the Spill grid to replace them.'
+              : 'Both grids now hold this saved day. Change cups, then press Record day to save the changes.');
+        sec.appendChild(editHint);
+      });
+      editTd.appendChild(editBtn);
+      tr.appendChild(editTd);
+      // Per-row Delete. First click arms a confirm prompt; a second click on the
+      // SAME day's button deletes ONLY that day (id=eq.<rowId>) — other days untouched.
+      const delTd = document.createElement('td');
+      const delBtn = document.createElement('button');
+      delBtn.className = 'btn-row-del';
+      delBtn.textContent = 'Delete';
+      delBtn.setAttribute('aria-label', 'Delete day ' + (ds.date || String(ds.id)));
+      delBtn.addEventListener('click', () => {
+        const rid = String(ds.id);
+        if (pendingDelRowId === rid) {
+          deleteData('daily_sales', `id=eq.${encodeURIComponent(rid)}`).then(() => location.reload());
+          return;
+        }
+        if (armedDelBtn && armedDelBtn !== delBtn) {
+          armedDelBtn.textContent = 'Delete';
+          armedDelBtn.classList.remove('armed');
+        }
+        pendingDelRowId = rid;
+        armedDelBtn = delBtn;
+        delBtn.textContent = 'Confirm?';
+        delBtn.classList.add('armed');
+        delConfirm.textContent = `Delete this recorded day — ${ds.date || String(ds.id)} · ${ds.recorder || ''}? Click "Confirm?" on the same row again to delete.`;
+      });
+      delTd.appendChild(delBtn);
+      tr.appendChild(delTd);
+      tbody.appendChild(tr);
     }
-    sec.appendChild(hist);
+    table.append(thead, tbody);
+    const scrollWrap = document.createElement('div');
+    scrollWrap.className = 'scroll-y';
+    scrollWrap.appendChild(table);
+    sec.appendChild(scrollWrap);
+    sec.appendChild(delConfirm);
   } else {
     const note = document.createElement('div'); note.className = 'empty-note';
-    note.textContent = 'No days recorded yet — record one below.';
+    note.textContent = 'No days recorded yet — fill the grids below and press Record day.';
     sec.appendChild(note);
   }
 
-  // §5 draw-down: current remaining vs this-day consumption (sold + wastage)
-  const ddTable = document.createElement('table');
-  const ddHead = document.createElement('thead');
-  const ddRow = document.createElement('tr');
-  ['Inventory ID', 'Item', 'UOM', 'Remaining', 'Consumed today', 'Projected', 'Oversold?'].forEach(h => {
-    const th = document.createElement('th'); th.textContent = h; ddRow.appendChild(th);
-  });
-  ddHead.appendChild(ddRow);
-  const ddBody = document.createElement('tbody');
-  for (const it of invItems) {
-    const tr = document.createElement('tr');
-    const projected = it.remaining; // form not yet submitted; shows saved state
-    const cells = [it.code, it.name, it.base_unit, `${it.remaining} ${it.base_unit}`, '—', `${projected} ${it.base_unit}`, projected < 0 ? 'OVERSOLD' : ''];
-    cells.forEach((val, i) => {
-      const td = document.createElement('td');
-      if (i === 6 && projected < 0) { td.className = 'neg'; td.textContent = 'OVERSOLD'; }
-      else td.textContent = String(val);
-      tr.appendChild(td);
-    });
-    ddBody.appendChild(tr);
-  }
-  ddTable.append(ddHead, ddBody);
-  sec.appendChild(ddTable);
-
-  // record form: date + recorder + up to 6 sales lines + up to 6 wastage lines
+  // record form: date + recorder + two grids (sales + spill), rows = drinks, cols = S/M/L
   const form = document.createElement('div');
   form.className = 'card';
   const dateInp = document.createElement('input');
@@ -2350,77 +2588,195 @@ async function renderDailySales() {
   recInp.setAttribute('aria-label', 'Recorder initials');
   form.append(dateInp, recInp);
 
-  const N_LINES = 6;
-  const saleInputs = [];
-  for (let i = 0; i < N_LINES; i++) {
-    const idInp = document.createElement('input');
-    idInp.className = 'field'; idInp.setAttribute('placeholder', `Sale ${i + 1}: recipe id (copy from Recipes)`);
-    idInp.setAttribute('aria-label', `Sale ${i + 1} recipe id`);
-    const qtyInp = document.createElement('input');
-    qtyInp.className = 'field'; qtyInp.type = 'number';
-    qtyInp.setAttribute('placeholder', `cups ${i + 1}`);
-    qtyInp.setAttribute('aria-label', `Sale ${i + 1} cups sold`);
-    form.append(idInp, qtyInp);
-    saleInputs.push([idInp, qtyInp]);
-  }
-  const N_WASTE = 6;
-  const wasteInputs = [];
-  for (let i = 0; i < N_WASTE; i++) {
-    const codeInp = document.createElement('input');
-    codeInp.className = 'field'; codeInp.setAttribute('placeholder', `Wastage ${i + 1}: Inventory ID (SC…)`);
-    codeInp.setAttribute('aria-label', `Wastage ${i + 1} inventory code`);
-    const qtyInp = document.createElement('input');
-    qtyInp.className = 'field'; qtyInp.type = 'number';
-    qtyInp.setAttribute('placeholder', `qty OUM ${i + 1}`);
-    qtyInp.setAttribute('aria-label', `Wastage ${i + 1} quantity in OUM`);
-    const reasonInp = document.createElement('input');
-    reasonInp.className = 'field'; reasonInp.setAttribute('placeholder', `reason ${i + 1} (spoilage/spill/burnt/other)`);
-    reasonInp.setAttribute('aria-label', `Wastage ${i + 1} reason`);
-    form.append(codeInp, qtyInp, reasonInp);
-    wasteInputs.push([codeInp, qtyInp, reasonInp]);
+  // grid columns — matches the schema CHECK (size in ('S','M','L'))
+  const sizes = ['S', 'M', 'L'];
+  const MAX_GRID_ROWS = 30;
+
+  function applyCells(row) {
+    const name = row.sel.value;
+    for (let i = 0; i < row.cells.length; i++) {
+      const inp = row.cells[i];
+      const rc = cellRecipe(name, sizes[i]);
+      const live = rc && cellPriced(rc);
+      inp.disabled = !live;
+      inp.classList.toggle('cell-off', !live);
+    }
   }
 
-  const recBtn = document.createElement('button');
-  recBtn.className = 'btn-add'; recBtn.textContent = 'Record day';
-  form.appendChild(recBtn);
+  function makeGrid(cls, hint) {
+    const rows = [];
+    const wrap = document.createElement('div');
+    wrap.className = cls;
+    const hintEl = document.createElement('div');
+    hintEl.className = 'grid-hint';
+    hintEl.textContent = hint;
+    wrap.appendChild(hintEl);
+    const body = document.createElement('div');
+    body.className = 'grid-body';
+    wrap.appendChild(body);
+    const head = document.createElement('div');
+    head.className = 'grid-head';
+    body.appendChild(head);
+    const headPad = document.createElement('span');
+    headPad.className = 'grid-head-pad';
+    headPad.textContent = '\u00a0';
+    head.appendChild(headPad);
+    for (const s of sizes) {
+      const lab = document.createElement('span');
+      lab.textContent = s;
+      lab.setAttribute('aria-hidden', 'true');
+      head.appendChild(lab);
+    }
+    const btn = document.createElement('button');
+    btn.className = 'btn-add';
+    btn.textContent = '+ Add drink';
+    btn.setAttribute('aria-label', 'Add a drink row to this grid');
+    function addRow() {
+      const rowEl = document.createElement('div');
+      rowEl.className = 'grid-row';
+      const sel = document.createElement('select');
+      sel.className = 'field';
+      sel.setAttribute('aria-label', `Drink ${rows.length + 1}`);
+      for (const name of drinkOptions) {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        sel.appendChild(opt);
+      }
+      rowEl.appendChild(sel);
+      const cells = [];
+      for (let i = 0; i < sizes.length; i++) {
+        const inp = document.createElement('input');
+        inp.className = 'field';
+        inp.type = 'number';
+        inp.setAttribute('placeholder', '0');
+        inp.setAttribute('aria-label', `${sizes[i]} cups`);
+        rowEl.appendChild(inp);
+        cells.push(inp);
+      }
+      body.appendChild(rowEl);
+      const row = { sel, cells, el: rowEl };
+      rows.push(row);
+      applyCells(row);
+      sel.addEventListener('change', () => applyCells(row));
+      return row;
+    }
+    btn.addEventListener('click', () => {
+      if (rows.length < MAX_GRID_ROWS) addRow();
+    });
+    wrap.appendChild(btn);
+    // Drop every row this grid built, DOM element included, so re-editing a day
+    // replaces the grid instead of stacking a second copy of it.
+    function clearRows() {
+      for (const r of rows) {
+        if (r.el && r.el.parentNode === body) body.removeChild(r.el);
+      }
+      rows.length = 0;
+    }
+    return { rows, wrap, btn, addRow, clearRows };
+  }
+
+  const salesGrid = makeGrid('grid-sales', 'Cups sold per size. Pick a drink, then type cups into S / M / L.');
+  const spillGrid = makeGrid('grid-spill', 'Cups spilled per size. Spills are expanded through the recipe and valued at cost — a drink may appear in BOTH grids.');
+
+  if (drinkOptions.length === 0) {
+    const noDrinks = document.createElement('div');
+    noDrinks.className = 'empty-note';
+    noDrinks.textContent = 'No drinks in Recipes yet — add one there before recording sales.';
+    form.appendChild(noDrinks);
+  }
+  form.append(salesGrid.wrap, spillGrid.wrap);
   const spillNote = document.createElement('div');
   spillNote.className = 'empty-note';
-  spillNote.textContent = 'A spilled cup = ONE wastage line in OUM — never also a sale line. Wastage is valued at cost and lowers stock.';
+  spillNote.textContent = 'A spilled cup is entered once in the Spill grid — it is expanded through the recipe and valued at cost, never also a sale line.';
   form.appendChild(spillNote);
+
+  const recBtn = document.createElement('button');
+  recBtn.className = 'btn-record'; recBtn.textContent = 'Record day';
+  recBtn.setAttribute('aria-label', 'Record this day');
+  form.appendChild(recBtn);
   sec.appendChild(form);
 
   recBtn.addEventListener('click', () => {
     const date = dateInp.value.trim();
     const recorder = recInp.value.trim();
-    const lines = [];
-    for (const [idInp, qtyInp] of saleInputs) {
-      const idKey = idInp.value.trim();
-      const qty = qtyInp.value.trim();
-      if (idKey === '' && qty === '') continue;
-      const rc = recipes.find(r => String(r.id) === idKey || String(r.id).startsWith(idKey));
-      if (!rc || qty === '' || !(Number(qty) > 0)) {
-        const w = document.createElement('div'); w.className = 'neg';
-        w.textContent = 'Each sale line needs a valid recipe id and a positive cups count.';
-        form.appendChild(w); return;
-      }
-      lines.push({ recipe_id: rc.id, size: rc.size, qty: Number(qty) });
+    if (date === '') {
+      const w = document.createElement('div'); w.className = 'neg';
+      w.textContent = 'Date is required — type the day (YYYY-MM-DD) before saving.';
+      form.appendChild(w); return;
     }
-    const wastage = [];
-    for (const [codeInp, qtyInp, reasonInp] of wasteInputs) {
-      const code = codeInp.value.trim().toUpperCase();
-      const qty = qtyInp.value.trim();
-      const reason = reasonInp.value.trim();
-      if (code === '' && qty === '') continue;
-      if (!rateByCode[code] || qty === '' || !(Number(qty) > 0)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      const w = document.createElement('div'); w.className = 'neg';
+      w.textContent = 'Date must be YYYY-MM-DD — for example 2026-10-17.';
+      form.appendChild(w); return;
+    }
+    {
+      const dm = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      const dy = new Date(Number(dm[1]), Number(dm[2]) - 1, Number(dm[3]));
+      const real = dy.getFullYear() === Number(dm[1]) && dy.getMonth() === Number(dm[2]) - 1 && dy.getDate() === Number(dm[3]);
+      if (!real) {
         const w = document.createElement('div'); w.className = 'neg';
-        w.textContent = 'Each wastage line needs a valid Inventory ID (SC…) and a positive qty in OUM.';
+        w.textContent = 'That date does not exist on a calendar — use a real one, for example 2026-10-17.';
         form.appendChild(w); return;
       }
-      wastage.push({ inventory_code: code, qty_oum: Number(qty), reason });
+    }
+    if (recorder === '') {
+      const w = document.createElement('div'); w.className = 'neg';
+      w.textContent = 'Recorder initials are required before saving.';
+      form.appendChild(w); return;
+    }
+    const clash = sales.find((ds) => String(ds.date || '') === date && String(ds.id) !== String(editingDayId || ''));
+    if (clash) {
+      const w = document.createElement('div'); w.className = 'neg';
+      w.textContent = `That date is already recorded — ${clash.date} · ${clash.recorder || ''}. Edit that row instead of adding a second one.`;
+      form.appendChild(w); return;
+    }
+    const lines = [];
+    const wastage = [];
+    const spillCells = [];
+    let spillCups = 0;
+    for (const grid of [salesGrid, spillGrid]) {
+      for (const row of grid.rows) {
+        const name = String(row.sel.value || '').trim();
+        for (let i = 0; i < row.cells.length; i++) {
+          const raw = row.cells[i].value.trim();
+          if (raw === '') continue;
+          const qty = Number(raw);
+          if (!(qty > 0)) continue;
+          if (name === '') {
+            const w = document.createElement('div'); w.className = 'neg';
+            w.textContent = 'Pick a drink for that row before entering cups.';
+            form.appendChild(w); return;
+          }
+          const rc = cellRecipe(name, sizes[i]);
+          if (!rc || !cellPriced(rc)) {
+            const w = document.createElement('div'); w.className = 'neg';
+            w.textContent = 'That drink + size has no recipe with a price — it cannot be sold or spilled.';
+            form.appendChild(w); return;
+          }
+          if (grid === salesGrid) {
+            lines.push({ recipe_id: rc.id, size: rc.size, qty: qty });
+          } else {
+            spillCups += qty;
+            spillCells.push({ recipe_id: rc.id, size: rc.size, qty: qty });
+            for (const wl of spillToWastageLines(rc, qty)) wastage.push(wl);
+          }
+        }
+      }
+    }
+    // Editing an existing day whose Spill grid holds no cups: keep the saved day's spills
+    // rather than silently wiping them. The grid is prefilled with them on Edit, so an
+    // empty grid means "leave as recorded" — spills can be changed, not zeroed out.
+    const savedSpillCells = editingDay && editingDay.totals && Array.isArray(editingDay.totals.spill_cells) ? editingDay.totals.spill_cells : null;
+    let spillsPreserved = false;
+    if (editingDayId && editingDay && !wastage.length && (editingDay.wastage || []).length) {
+      for (const wl of editingDay.wastage) wastage.push(wl);
+      spillCups = Number(editingDay.totals && editingDay.totals.spill_cups != null ? editingDay.totals.spill_cups : (editingDay.wastage || []).length);
+      spillsPreserved = true;
     }
     if (!lines.length && !wastage.length) {
       const w = document.createElement('div'); w.className = 'neg';
-      w.textContent = 'Add at least one sale or wastage line.';
+      w.textContent = 'Add at least one sale or spill cup.';
       form.appendChild(w); return;
     }
     let revenue = 0, cogs = 0, wastageCost = 0;
@@ -2444,12 +2800,32 @@ async function renderDailySales() {
       wastage: Math.round(wastageCost * 100) / 100,
       wastagePct: Math.round(wastagePct * 1000) / 10,
       net: Math.round(net * 100) / 100,
+      spill_cups: spillCups,
+      spill_cells: spillsPreserved ? (savedSpillCells || null) : spillCells,
     };
     // cannot block oversell — record regardless; stock-take reconciles later.
-    postData('daily_sales', { date: date || null, recorder, lines, wastage, totals }).then(() => location.reload());
+    if (spillsPreserved) {
+      const n = document.createElement('div'); n.className = 'grid-hint';
+      n.textContent = 'Spills from the saved day were kept. Type cups into the Spill grid to replace them.';
+      form.appendChild(n);
+    }
+    const oversold = backgroundDrawDown(lines, wastage);
+    if (oversold.length) {
+      const n = document.createElement('div'); n.className = 'neg';
+      n.textContent =
+        'Stock-take warning — ' +
+        oversold
+          .slice(0, 3)
+          .map(function(o) { return `${o.code} ${o.name}: ${Math.abs(o.projected)} ${o.base_unit || 'units'} short`; })
+          .join(' · ') +
+        '. Day recorded anyway; Inventory reconciles on stock-take.';
+      form.appendChild(n);
+    }
+    const body = dayBody(date, recorder, lines, wastage, totals);
+    const write = editingDayId ? patchData('daily_sales', 'id=eq.' + encodeURIComponent(editingDayId), body) : postData('daily_sales', body);
+    write.then(() => location.reload());
   });
 
-  addDeleteCard(sec, sales, 'daily_sales', 'Daily-sales id (copy from a row)');
   addPrintButton(sec, 'Print daily-sales record');
   return sec;
 }

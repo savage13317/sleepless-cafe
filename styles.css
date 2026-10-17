@@ -137,11 +137,57 @@ caption.tbl-caption {
 }
 .btn-print:hover { border-color: var(--amber); color: var(--amber); }
 
+/* ---- R41: M5 daily-sales grid — rows = drinks, columns = S/M/L ---- */
+.grid-sales, .grid-spill { margin: 0 0 18px; }
+.grid-hint { color: var(--ink-dim); font-size: .85rem; margin: 0 0 8px; }
+.grid-body {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.3fr) minmax(64px, 1fr) minmax(64px, 1fr) minmax(64px, 1fr);
+  column-gap: 8px; row-gap: 8px;
+}
+.grid-head, .grid-row { display: contents; }
+.grid-head span { color: var(--ink-dim); font-size: .8rem; text-align: center; }
+/* the invisible spacer that keeps S/M/L over the three cup columns, not the name column */
+.grid-head-pad { color: transparent; }
+.grid-row select.field {
+  flex: 2 1 150px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  background: var(--bg-raised); color: var(--ink);
+  border: 1px solid var(--bg-line); border-radius: var(--radius);
+  padding: 8px 14px; font-size: .9rem; font-family: var(--font);
+}
+.grid-row input.field {
+  flex: 1 1 90px; min-width: 64px;
+  background: var(--bg-raised); color: var(--ink);
+  border: 1px solid var(--bg-line); border-radius: var(--radius);
+  padding: 8px 14px; font-size: .9rem; font-family: var(--font);
+}
+.grid-row input.field.cell-off {
+  background: var(--bg); color: var(--ink-dim);
+  border: 1px dashed var(--bg-line); opacity: .5; cursor: not-allowed;
+}
+.btn-add {
+  display: inline-block; cursor: pointer;
+  background: var(--bg-raised); color: var(--ink);
+  border: 1px solid var(--bg-line); border-radius: var(--radius);
+  padding: 6px 12px; font-size: .85rem;
+}
+.btn-add:hover { border-color: var(--amber); color: var(--amber); }
+.btn-record {
+  display: inline-block; cursor: pointer;
+  background: var(--bg-raised); color: var(--ink);
+  border: 1px solid var(--bg-line); border-radius: var(--radius);
+  padding: 8px 14px; font-size: .9rem;
+}
+.btn-record:hover { border-color: var(--amber); color: var(--amber); }
+
 /* ---- responsive: collapse nav to hamburger on mobile ---- */
 @media (max-width: 720px) {
   header { flex-wrap: wrap; }
   nav { flex-direction: column; align-items: start; gap: 6px; }
   nav a { display: block; padding: 6px 10px; border-radius: 8px; }
+  .grid-body { column-gap: 6px; grid-template-columns: minmax(96px, 1.4fr) minmax(52px, 1fr) minmax(52px, 1fr) minmax(52px, 1fr); }
+  .grid-row input.field { min-width: 52px; padding: 6px 10px; }
 }
 
 /* ---- Phase 9: print / export — light, legible on paper ---- */
