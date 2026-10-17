@@ -291,5 +291,116 @@ The plan phases R0–R12 are done; user then drove module-by-module fine-tuning 
 - **R27–R29 — M2 Overhead** (commit 577ae6d): two-column forms, live expense-name suggestions, zero-target guard, cost table without id column + per-row Edit/Delete, clean "≈ 2,738 cups / month" derived line.
 - **R30–R37 — M3 Recipes** (commit f1e7720): recipe table + per-row Edit/Delete, two-column form, ingredient dropdown of inventory on hand (blank '—' first option), qty label shows recorded base_unit, per-ingredient cost lines, one-cup cost = live recipe cost + overhead/cup (fresh `overheadPerCup()`, not the stale global), Edit refreshes all live boxes, progressive ingredient disclosure (Ingredient 1 first, next reveals only when previous fully filled, up to 15).
 - **R38–R38b — M4 Selling price** (commit a3962d4, pushed f1e7720..a3962d4): `renderPricing()` mirrors M1–M3 UX — fresh overhead per cup, table (Drink/Size/Recipe cost/Overhead per cup/All-in cost/Sell price/Margin/Edit, no id, scroll-y + caption), per-row Edit (PATCH same pricing row), recipe-dropdown form with live margin-preview box, NO Delete column (recipe deletion stays in the Recipes tab), table sorted by margin highest→lowest (unsold rows last).
+- **R39–R39c — post-checkpoint polish** (commit 4584a7b, pushed): M2 overhead period/cost table sorted alphabetically; M4 sell-price form suggests a sane sell range (all-in ÷ 0.8 → all-in ÷ 0.6). `origin/main` = **4584a7b**.
 
-**BEST-VERSION CHECKPOINT (2026-10-15):** user declared the R38b state "our best version" — `origin/main` = **a3962d4**, verified locally at `:8731/?v=44#pricing`. Modules 1–4 complete and verified; M5 (Daily Sales) and M6 (Inventory) still at plan-phase skeletons awaiting the same UX bar.
+---
+
+# M5 Daily Sales — grid redesign plan (R40 → R44)
+
+**Why this round exists:** M5 is still the R8 skeleton — a flat form of 6 sale lines where the user must hand-type a **recipe UUID** (`Sale 1: recipe id (copy from Recipes)`) plus 6 wastage lines where they must hand-type an **Inventory ID (SC…)** and qty in OUM. That is the worst UX in the repo: two copy-paste-the-UUID steps, no dropdown, no live feedback, and a spill can be entered as either a sale line or a wastage line, which is exactly the double-count the R8 decisions warn about.
+
+**User decisions (locked — do not revisit):**
+1. **Two grids, not one.** A **Sales grid** and a **Spill grid**, each with rows = drink and columns = **S / M / L**.
+2. **Dropdown = drink / recipe name only.** Size is never typed and never in the dropdown — it is the **column**.
+3. **No spoilage / burnt / "other" lines on M5.** The only wastage entry is the Spill grid.
+
+**The key structural fact (verified, `app.js:1223` / `2001` / `2135`):** `recipes` and `pricing` are already keyed **`drink||size`**. So the grid is a pure **transposition** of the existing drink·size table — the S/M/L columns land on keys that already exist. No new table, no schema change, no new key.
+
+**The wire format must not change (verified, `app.js:99–130` + `1115–1130`):** `soldByPurchase()` and the Inventory §4 history both read `ds.lines` **and** `ds.wastage`. `daily_sales` stays one row per day:
+`{ date, recorder, lines:[{recipe_id,size,qty}], wastage:[{inventory_code,qty_oum,reason}], totals:{revenue,cogs,gross,wastage,wastagePct,net} }`.
+**R41/R42 change the UI only.** If the wire shape drifts, Inventory silently stops drawing stock down.
+
+---
+
+## R40 — M5 nav entry (mirrors R1 / R19 / R26 / R33)
+
+**Goal:** Daily Sales opens as its own module, after Pricing and before Inventory.
+
+- `buildSite()` already has the `daily-sales` branch (`app.js:320`); confirm render order `purchases → overhead → recipes → pricing → daily-sales → inventory` so `overheadPerCup()` and `rateByCode` are warm.
+- `sessionStorage slc_view` restores `#daily-sales` after reload — same mechanism M1–M4 use.
+
+**Done-when:** clicking Daily Sales clears `main` and renders only M5; `:8731/?v=45#daily-sales` reloads back into M5, not Purchases.
+
+**Unlocks:** R41.
+
+**Agent:** **Backend Division** (controller/nav wiring) — 15 min, low risk.
+
+---
+
+## R41 — M5 grid form UX (the big one; mirrors R2 / R14 / R27 / R34)
+
+**Goal:** the mockup. Two grids, drink dropdown, S/M/L columns.
+
+- **Sales grid** — rows added with `+ Add drink`; each row = `[ drink ▾ | S | M | L ]`.
+- **Spill grid** — identical shape, separate section below.
+- Dropdown options = **distinct drink names** from `recipes` (newest-first, deduped) — NOT `drink (Size)` as M4 does, and never a UUID.
+- **A cell is only live if that `drink||SIZE` exists.** No recipe/price for Latte M → grey the cell, reject a value there. This is what kills the "sell a size that was never priced" hole.
+- **One dropdown row feeds both grids' maths but the grids stay independent** — a drink may appear in Sales and, separately, in Spill.
+- Two-column field rows, `.field` selects, live boxes — match M1–M4 exactly.
+
+**Done-when:** dropdown shows drink names only; typing `Latte` suggests existing Latte rows; entering `3 / 2 / 1` in the Sales row and `0 / 1 / 0` in the Spill row renders both grids with those cells and no validation error.
+
+**Unlocks:** R42.
+
+**Agent:** **Frontend Division** (grid DOM, `.field` selects, disabled-cell styling, two-column rows, accessibility labels) — heaviest item, ~2 h. Hand off the cell-enable predicate to Backend, not the math.
+
+---
+
+## R42 — M5 grid → wire format (mirrors R3 / R15 / R28 / R35)
+
+**Goal:** the grids compile into the **unchanged** `daily_sales` row.
+
+- Each non-zero Sales cell → `lines.push({ recipe_id, size, qty })` — `size` comes from the **column**, `recipe_id` resolved from the drink name + size.
+- Each non-zero Spill cell → expand the cup **through its recipe ingredients** into `wastage.push({ inventory_code, qty_oum, reason: 'spill' })`. This is the one non-obvious step: the user never types an Inventory ID or an OUM amount, yet `soldByPurchase()` still needs OUM-by-code to draw stock down.
+- Zero / blank cells → no row. Reject negatives and non-numeric cells.
+- Keep `totals` exactly as R8 defines: `Gross = Revenue − COGS`, `Net = Gross − Wastage`, `Wastage % = Wastage ÷ COGS`.
+- **Never reject the record on oversell** (R8 decision 3) — flag `OVERSOLD`, let the stock-take reconcile.
+
+**Done-when:** the R8 worked example still reproduces through the grid — 1 Latte M sold (sell ₱120, cost ₱15.75) + 1 Latte M spilled → Revenue ₱120.00, COGS ₱15.75, Gross ₱104.25, Wastage = Latte M's ingredient OUM at ₱/OUM, Net below Gross, and Milk A remaining drops by **sold + spilled** OUM (both decrement). Verify the posted JSON body has the same keys as before.
+
+**Unlocks:** R43.
+
+**Agent:** **Backend Division** (grid→row compilation, recipe expansion, totals, POST body) — highest-risk item; the recipe-expansion step is where a wrong OUM silently corrupts Inventory.
+
+---
+
+## R43 — M5 display table + live preview (mirrors R4 / R16 / R29 / R36)
+
+**Goal:** the day reads as a table, and the cost preview is live before submit.
+
+- Scroll-y audit table with caption, one row per **drink·size that has activity**, columns: Drink · Size · Sold · Spilled · Revenue · COGS · Net contribution. No UUID column (M1–M4 dropped ids from tables).
+- Live preview box beside the grids: **Revenue ₱ · COGS ₱ · Wastage ₱ · Net ₱** recomputed on every cell edit, so the user sees the number before pressing `Record day`.
+- Per-row **Edit** re-opens that drink in the grid; **Delete** zeroes the row. Two-click Delete, same as M1.
+- Keep `addPrintButton` and the `addDeleteCard` for deleting a whole recorded **day** (that id is a day id, not a drink id — label it so).
+
+**Done-when:** table sorted by revenue highest→lowest; preview box updates without reload; deleting a row zeroes its contribution in both the box and the table.
+
+**Unlocks:** R44.
+
+**Agent:** **Frontend Division** (table render, scroll-y + caption, live box, Edit/Delete rows) — ~1 h.
+
+---
+
+## R44 — M5 polish + verification (mirrors R11 / R37–R39c)
+
+**Goal:** same bar as M1–M4, then commit + push.
+
+- Sort rows consistently (revenue desc, zero-activity rows last); suggest sane ranges where useful.
+- Fresh local `overheadPerCup()` — **do not** read the module-level `OVERHEAD_PER_CUP` global (R34 gotcha; Recipes/Pricing/DailySales each define their own).
+- Docs: append this round to the revision log; commit code separately from docs.
+- **QA gate:** run the R42 worked example end-to-end at `:8731`, then confirm Inventory draw-down and §4 history still agree with the posted row — that is the regression that matters, not the styling.
+
+**Done-when:** M5 verified at `:8731/?v=46#daily-sales`; `git status` clean; code commit and docs commit pushed; `origin/main` = new code SHA.
+
+**Agent:** **QA Division** (terminal build check, live-example reproduction, Inventory regression check, git hygiene) — run last, do not skip.
+
+---
+
+## M5 gotchas (verified against current code — read before coding)
+
+1. **`soldByPurchase()` reads `ds.lines` AND `ds.wastage`.** The Spill grid must emit `{inventory_code, qty_oum}`, not `{drink, size, cups}`. Expanding a spilled cup through its recipe is mandatory or Inventory stops drawing stock down.
+2. **`daily_sales` is one row per day with JSON arrays**, not one row per sale. Do not "flatten the grid into one POST per cell" — that breaks every reader at `app.js:103`, `421`, `977`, `1115`.
+3. **`pricing.size` CHECK was already dropped live** (gotcha 2 above). A cell may reference a size that has no price row → `sellByKey[key] == null` → revenue silently 0. Grey the cell instead of pricing it at ₱0.
+4. **`reason` is free text today** and nothing filters it. Narrowing M5 to spill means writing `reason: 'spill'` — keep the key, since history rendering and future reconciliation may read it.
+5. **`recById` is built from `recipes` by `id`; the grid dropdown gives names.** Resolve name+size → recipe row first (`drink||size` key, same as `app.js:2009`), then take its `id` for `lines[].recipe_id`.
+6. **No build step, no linter, no tests.** Verification = reproduce the worked example in the browser and diff the posted JSON body.

@@ -22,11 +22,13 @@ Plus a **Dashboard** with summary cards: stock value ₱ · low-stock count · s
 
 ## Current build status
 
-Best-version checkpoint (2026-10-15): `origin/main` = **a3962d4**. Modules 1–4 (Purchases, Overhead,
-Recipes, Selling price) are complete and verified to a consistent UX bar — two-column forms, live
-suggestion/preview boxes, dropdowns of existing data, per-row Edit, fresh overhead-per-cup math,
-no stale globals. Modules 5–6 (Daily Sales, Inventory) remain at their plan-phase skeletons.
-See `REV_PLAN.md` for the full revision log (R0–R38b).
+Latest commit (2026-10-15): `origin/main` = **4584a7b** (R39b+R39c — overhead cost table sorted
+alphabetically, pricing form suggests a sell-price range). Best-verified UX checkpoint: **a3962d4**
+(R38b). Modules 1–4 (Purchases, Overhead, Recipes, Selling price) are complete and verified to a
+consistent UX bar — two-column forms, live suggestion/preview boxes, dropdowns of existing data,
+per-row Edit, fresh overhead-per-cup math, no stale globals. Modules 5–6 (Daily Sales, Inventory)
+remain at their plan-phase skeletons; the M5 grid redesign is planned as R40–R44 in `REV_PLAN.md`.
+See `REV_PLAN.md` for the full revision log (R0–R39c).
 
 ## Running it locally
 
