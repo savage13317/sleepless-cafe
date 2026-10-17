@@ -2017,9 +2017,9 @@ async function renderPricing() {
   let pricingEditingKey = null;   // "drink||size" being re-priced via the form
   let pricingEditingRowId = null; // existing pricing row id to PATCH (null -> POST new)
 
-  // R38b: build the row data first, then SORT by margin highest -> lowest. Rows with
-  // no sell price yet have a null margin and sort to the bottom. Deleting recipes is
-  // the Recipes tab's job, so this table only offers Edit.
+  // R38b: build the row data first, then SORT alphabetically A->Z by drink name,
+  // then by size S->M->L. Deleting recipes is the Recipes tab's job, so this table
+  // only offers Edit.
   const priceRows = [];
   for (const rc of recipes) {
     const ing = Array.isArray(rc.ingredients) ? rc.ingredients : [];
@@ -2031,11 +2031,11 @@ async function renderPricing() {
     const margin = (sell == null) ? null : sell - allIn;
     priceRows.push({ rc, ing, rcost, allIn, key, sellRow, sell, margin });
   }
+  const sizeRank = { S: 0, M: 1, L: 2 };
   priceRows.sort((a, b) => {
-    if (a.margin == null && b.margin == null) return 0;
-    if (a.margin == null) return 1;   // null margin sorts last
-    if (b.margin == null) return -1;
-    return b.margin - a.margin;       // highest -> lowest
+    const byName = String(a.rc.drink_name).localeCompare(String(b.rc.drink_name), undefined, true);
+    if (byName) return byName;
+    return sizeRank[String(a.rc.size).toUpperCase()] - sizeRank[String(b.rc.size).toUpperCase()];
   });
 
   // table: one row per recipe, with cost / overhead / all-in / sell / margin + Edit
@@ -2043,7 +2043,7 @@ async function renderPricing() {
     const table = document.createElement('table');
     const cap = document.createElement('caption');
     cap.className = 'tbl-caption';
-    cap.textContent = 'Selling price — one row per drink · size';
+    cap.textContent = 'Selling price — one row per drink · size (A–Z, then S · M · L)';
     table.appendChild(cap);
     const thead = document.createElement('thead');
     const hrow = document.createElement('tr');
@@ -2145,7 +2145,13 @@ async function renderPricing() {
     seenKeys[key] = true;
     recipeOptions.push({ key, label: `${rc.drink_name} (${rc.size})` });
   }
-  recipeOptions.sort((a, b) => a.label.localeCompare(b.label));
+  recipeOptions.sort((a, b) => {
+    const [aName, aSize] = a.key.split('||');
+    const [bName, bSize] = b.key.split('||');
+    const byName = String(aName).localeCompare(String(bName), undefined, true);
+    if (byName) return byName;
+    return sizeRank[String(aSize).toUpperCase()] - sizeRank[String(bSize).toUpperCase()];
+  });
   for (const o of recipeOptions) {
     // R27b lesson: <option> needs BOTH value AND textContent or it renders blank.
     const opt = document.createElement('option');

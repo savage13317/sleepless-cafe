@@ -283,15 +283,17 @@ R0, R1, R10, R12 are fast. **R2, R3, R6 are the risky ones** (ID counter, aggreg
 
 ---
 
-## Post-plan revision log (R13 → R38b) — session 6
+## Post-plan revision log (R13 → R45) — sessions 6–8
 
 The plan phases R0–R12 are done; user then drove module-by-module fine-tuning rounds (R13–R38b). Full per-round detail lives in the repo memory file; key milestones:
 
 - **R13–R26 — M1 Purchases** (commits 770c3ec … 39ba97a): auto Inventory ID on typed name, live suggestion box (partial hints, exact auto-ID), two-column field rows, per-row Edit (date preserved) + two-click Delete, ID box hard-locked from typing, same-tab reload via `sessionStorage slc_view`, scroll-capped audit table with Date column + captions.
 - **R27–R29 — M2 Overhead** (commit 577ae6d): two-column forms, live expense-name suggestions, zero-target guard, cost table without id column + per-row Edit/Delete, clean "≈ 2,738 cups / month" derived line.
 - **R30–R37 — M3 Recipes** (commit f1e7720): recipe table + per-row Edit/Delete, two-column form, ingredient dropdown of inventory on hand (blank '—' first option), qty label shows recorded base_unit, per-ingredient cost lines, one-cup cost = live recipe cost + overhead/cup (fresh `overheadPerCup()`, not the stale global), Edit refreshes all live boxes, progressive ingredient disclosure (Ingredient 1 first, next reveals only when previous fully filled, up to 15).
-- **R38–R38b — M4 Selling price** (commit a3962d4, pushed f1e7720..a3962d4): `renderPricing()` mirrors M1–M3 UX — fresh overhead per cup, table (Drink/Size/Recipe cost/Overhead per cup/All-in cost/Sell price/Margin/Edit, no id, scroll-y + caption), per-row Edit (PATCH same pricing row), recipe-dropdown form with live margin-preview box, NO Delete column (recipe deletion stays in the Recipes tab), table sorted by margin highest→lowest (unsold rows last).
+- **R38–R38b — M4 Selling price** (commit a3962d4, pushed f1e7720..a3962d4): `renderPricing()` mirrors M1–M3 UX — fresh overhead per cup, table (Drink/Size/Recipe cost/Overhead per cup/All-in cost/Sell price/Margin/Edit, no id, scroll-y + caption), per-row Edit (PATCH same pricing row), recipe-dropdown form with live margin-preview box, NO Delete column (recipe deletion stays in the Recipes tab), table sorted by margin highest→lowest (unsold rows last) — **sort superseded by R45, see below**.
 - **R39–R39c — post-checkpoint polish** (commit 4584a7b, pushed): M2 overhead period/cost table sorted alphabetically; M4 sell-price form suggests a sane sell range (all-in ÷ 0.8 → all-in ÷ 0.6). `origin/main` = **4584a7b**.
+- **R40–R44 — M5 Daily Sales grid redesign** (plan written this session; R40–R41 code shipped in `0a51c32`): see the plan section below.
+- **R45 — M4 Selling price sort** (this session): `renderPricing()` table order changed from margin-descending to **A–Z by drink name, then S · M · L** — `sizeRank = { S: 0, M: 1, L: 2 }` with `localeCompare(name, undefined, true)` (case-insensitive), mirroring the alphabetical M2 table from R39b. The sell-price `<select>` uses the same comparator so the dropdown mirrors the table top-to-bottom (it previously sorted `Drink (Size)` by plain label, which ordered sizes L, M, S); `option.value` stays `drink||size`, so Edit/POST/PATCH round-tripping is unchanged. Caption now states the order. No fallback rank added — sizes are schema-enforced (`schema.sql`: `check (size in ('S','M','L'))`), so bad data surfaces instead of being hidden. The Margin column is still displayed; it is no longer the sort key.
 
 ---
 
