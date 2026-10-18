@@ -22,15 +22,17 @@ Plus a **Dashboard** with summary cards: stock value ₱ · low-stock count · s
 
 ## Current build status
 
-Latest commit (2026-10-16): `origin/main` = **8592e0e** (R46–R50 — Inventory rebuilt as a
-stock-take ledger: a Stock Taking update column in the stock table with a Total row, one record
-per stock-take date with per-row Edit and two-click Delete, and a live lost/savings/net preview).
-Earlier checkpoints: **67e6ebe** (R45 — selling-price table sorted A-Z then S/M/L) and **a3962d4**
-(R38b, best-verified UX). Modules 1–5 (Purchases, Overhead, Recipes, Selling price, Daily Sales)
+Latest code commit (2026-10-18): **433c59a** (R52 — Recipes table sorted A–Z then S/M/L so it
+matches the Selling-price table row for row; Daily Sales recorded-days table gained Year/Month
+filter dropdowns, a five-row scroll window that reaches every filtered day instead of a hard
+eight-row cap, a summary card for the period in view, and Revenue / Net Income headers). Earlier
+checkpoints: **8592e0e** (R46–R50 — Inventory stock-take ledger), **67e6ebe** (R45 — selling-price
+table sorted A-Z then S/M/L) and **a3962d4** (R38b, best-verified UX). Modules 1–5 (Purchases,
+Overhead, Recipes, Selling price, Daily Sales)
 are complete and verified to a consistent UX bar — two-column forms, live suggestion/preview boxes,
 dropdowns of existing data, per-row Edit, fresh overhead-per-cup math, no stale globals. Module 6
 (Inventory) code is committed and QA-gated, but has not yet been walked through in a browser —
-verify it before treating it as shipped. See `REV_PLAN.md` for the full revision log (R0–R50).
+verify it before treating it as shipped. See `REV_PLAN.md` for the full revision log (R0–R52).
 
 ## Running it locally
 
