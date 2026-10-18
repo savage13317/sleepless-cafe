@@ -42,6 +42,10 @@ The math chain drives the order: **purchases → ₱/base → (inventory, recipe
 
 **Done-when:** local server serves `index.html` and the theme colors render.
 
+> R53 addendum: the root `index.html` was later replaced — the SOP manual took the root and this
+> tool shell was renamed `staff.html` (`git mv index.html staff.html`). Phase 0's intent still holds:
+> a local server serves the root page, and the tool is one click away at `/staff.html`.
+
 **Unlocks:** everything after.
 
 ---

@@ -4,6 +4,19 @@ Private, staff-facing costing + inventory tool for **Sleepless Café** (Caloocan
 Not a public site — it is an **unlisted** page for staff only. Never linked from the
 Facebook page.
 
+## Two pages (R53)
+
+- **`index.html` — the site root.** The SOP manual / staff portal: overview, roles, checklists,
+  recipes, maintenance and cash handling, with its own print/export styles. This is the landing page.
+- **`staff.html`** — the costing + inventory tool described below (the six modules). Reached from the
+  manual's nav bar through the **Staff Reference · Costing Portal** button; every module screen has a
+  **← Landing page** button back to the manual.
+
+The passphrase gate belongs to the tool. Unlocking once covers both pages — the token is stored in
+`localStorage`, which is origin-wide, so opening the manual first and clicking through needs no
+second passphrase. The manual pulls Tailwind, Font Awesome and Google Fonts from CDNs; offline or
+CDN-blocked it degrades to unstyled text, while the tool has no such dependency.
+
 ## What it does
 
 Six modules, each a focused tool (see `PLAN.md` for the full spec). Modules are separate
@@ -22,17 +35,18 @@ Plus a **Dashboard** with summary cards: stock value ₱ · low-stock count · s
 
 ## Current build status
 
-Latest code commit (2026-10-18): **433c59a** (R52 — Recipes table sorted A–Z then S/M/L so it
-matches the Selling-price table row for row; Daily Sales recorded-days table gained Year/Month
-filter dropdowns, a five-row scroll window that reaches every filtered day instead of a hard
-eight-row cap, a summary card for the period in view, and Revenue / Net Income headers). Earlier
-checkpoints: **8592e0e** (R46–R50 — Inventory stock-take ledger), **67e6ebe** (R45 — selling-price
-table sorted A-Z then S/M/L) and **a3962d4** (R38b, best-verified UX). Modules 1–5 (Purchases,
+Latest code commit (2026-10-18): **9fb502a** (R53 — site restructured to two pages: `index.html` is now
+the SOP manual landing page and the costing tool shell moved to `staff.html`; the manual gained a portal
+button into `staff.html`, the tool gained a `home-btn` back to the manual, and the manual's stray LaTeX
+fragments were cleaned). Earlier checkpoints: **433c59a** (R52 — Recipes
+sorted A–Z then S/M/L; Daily Sales Year/Month filters, five-row scroll window, period summary card,
+Revenue / Net Income headers), **8592e0e** (R46–R50 — Inventory stock-take ledger), **67e6ebe** (R45
+— selling-price table sorted A-Z then S/M/L) and **a3962d4** (R38b, best-verified UX). Modules 1–5 (Purchases,
 Overhead, Recipes, Selling price, Daily Sales)
 are complete and verified to a consistent UX bar — two-column forms, live suggestion/preview boxes,
 dropdowns of existing data, per-row Edit, fresh overhead-per-cup math, no stale globals. Module 6
 (Inventory) code is committed and QA-gated, but has not yet been walked through in a browser —
-verify it before treating it as shipped. See `REV_PLAN.md` for the full revision log (R0–R52).
+verify it before treating it as shipped. See `REV_PLAN.md` for the full revision log (R0–R53).
 
 ## Running it locally
 
@@ -42,7 +56,9 @@ Open the folder and serve it:
 python -m http.server 8731 --directory "c:\Users\USER\Desktop\Sleepless Cafe"
 ```
 
-Then open <http://localhost:8731/> in a browser. Enter the passphrase to unlock.
+Then open <http://localhost:8731/> in a browser — that is the SOP manual (landing page). The costing
+tool sits at <http://localhost:8731/staff.html>; the manual's nav bar links straight to it. Enter the
+passphrase once to unlock.
 
 ## Passphrase gate
 
