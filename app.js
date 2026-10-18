@@ -1592,6 +1592,17 @@ async function renderRecipes() {
   }
   const ohPerCup = await overheadPerCup();
 
+  // R52: sort the table rows A–Z by drink name, then S · M · L within a name — the
+  // same comparator the Selling-price table uses (R45), so the two tables read in
+  // identical order. The raw fetch order (created_at.desc) is newest-first, which
+  // made Recipes and Pricing disagree row for row.
+  const sizeRank = { S: 0, M: 1, L: 2 };
+  recipes.sort((a, b) => {
+    const byName = String(a.drink_name).localeCompare(String(b.drink_name), undefined, true);
+    if (byName) return byName;
+    return sizeRank[String(a.size).toUpperCase()] - sizeRank[String(b.size).toUpperCase()];
+  });
+
   // R30: recipe TABLE (not cards) — one row per (drink, size), mirroring the
   // purchases / overhead table UX (R28): no id column, per-row Edit + Delete.
   // Edit re-opens the recipe in the entry form (save PATCHes the SAME row);
@@ -1612,7 +1623,7 @@ async function renderRecipes() {
     const table = document.createElement('table');
     const cap = document.createElement('caption');
     cap.className = 'tbl-caption';
-    cap.textContent = 'Recipes — one row per drink · size';
+    cap.textContent = 'Recipes — one row per drink · size (A–Z, then S · M · L)';
     table.appendChild(cap);
     const thead = document.createElement('thead');
     const hrow = document.createElement('tr');
@@ -2752,130 +2763,257 @@ async function renderDailySales() {
     ht.textContent = 'Recorded days';
     hist.appendChild(ht);
     sec.appendChild(hist);
+    // R52: Year / Month pickers ("sorter of years and months") narrow the recorded-days
+    // table. Options are built from the dates actually on file, newest first, so a
+    // dropdown never offers a period with nothing in it. A blank value means "All".
+    const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'];
+    const yearOpts = [];
+    const monthOpts = [];
+    for (const ds of sales) {
+      const d = String(ds.date || '');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
+      if (!yearOpts.includes(d.slice(0, 4))) yearOpts.push(d.slice(0, 4));
+      if (!monthOpts.includes(d.slice(5, 7))) monthOpts.push(d.slice(5, 7));
+    }
+    yearOpts.sort((a, b) => Number(b) - Number(a));
+    monthOpts.sort((a, b) => Number(b) - Number(a));
+    const periodCard = document.createElement('div');
+    periodCard.className = 'card';
+    const pcHead = document.createElement('div');
+    pcHead.textContent = 'Sort by period';
+    periodCard.appendChild(pcHead);
+    const mkPeriodRow = (labelText) => {
+      const row = document.createElement('div');
+      row.className = 'field-row';
+      const lab = document.createElement('div');
+      lab.className = 'field-label';
+      lab.textContent = labelText;
+      row.appendChild(lab);
+      periodCard.appendChild(row);
+      return row;
+    };
+    const yearRow = mkPeriodRow('Year');
+    const yearSel = document.createElement('select');
+    yearSel.className = 'field';
+    yearSel.setAttribute('aria-label', 'Filter recorded days by year');
+    {
+      const opt = document.createElement('option');
+      opt.value = ''; opt.textContent = 'All years';
+      yearSel.appendChild(opt);
+    }
+    yearOpts.forEach((y) => {
+      // R27b lesson: <option> needs BOTH value AND textContent or it renders blank.
+      const opt = document.createElement('option'); opt.value = y; opt.textContent = y;
+      yearSel.appendChild(opt);
+    });
+    yearRow.appendChild(yearSel);
+    const monthRow = mkPeriodRow('Month');
+    const monthSel = document.createElement('select');
+    monthSel.className = 'field';
+    monthSel.setAttribute('aria-label', 'Filter recorded days by month');
+    {
+      const opt = document.createElement('option');
+      opt.value = ''; opt.textContent = 'All months';
+      monthSel.appendChild(opt);
+    }
+    monthOpts.forEach((mm) => {
+      const opt = document.createElement('option');
+      opt.value = mm; opt.textContent = MONTH_NAMES[Number(mm) - 1];
+      monthSel.appendChild(opt);
+    });
+    monthRow.appendChild(monthSel);
+    sec.appendChild(periodCard);
+    // R52: which days are in view follows the two pickers (blank = no constraint).
+    const dayInView = (ds) => {
+      const d = String(ds.date || '');
+      if (yearSel.value && d.slice(0, 4) !== yearSel.value) return false;
+      if (monthSel.value && d.slice(5, 7) !== monthSel.value) return false;
+      return true;
+    };
+    const visibleDays = () => sales.filter(dayInView);
     const table = document.createElement('table');
     const cap = document.createElement('caption');
     cap.className = 'tbl-caption';
-    cap.textContent = 'Recorded days';
+    cap.textContent = 'Recorded days — newest first (scroll for older dates)';
     table.appendChild(cap);
     const thead = document.createElement('thead');
     const hrow = document.createElement('tr');
-    ['Date', 'Recorder', 'Sales', 'Spill cost ₱', 'Rev ₱', 'COGS ₱', 'Net ₱', 'Edit', 'Delete'].forEach(h => {
+    // R52: headers spelled out — "Rev ₱" / "Net ₱" were clipping to three letters in
+    // the 93px columns and read as jargon; Revenue / Net Income match the words used
+    // in the summary card below.
+    ['Date', 'Recorder', 'Sales', 'Spill cost ₱', 'Revenue ₱', 'COGS ₱', 'Net Income ₱', 'Edit', 'Delete'].forEach(h => {
       const th = document.createElement('th'); th.textContent = h; hrow.appendChild(th);
     });
     thead.appendChild(hrow);
     const tbody = document.createElement('tbody');
-    for (const ds of sales.slice(0, 8)) {
-      const tt = ds.totals || {};
-      const tr = document.createElement('tr');
-      const dateTd = document.createElement('td');
-      dateTd.textContent = ds.date || '';
-      tr.appendChild(dateTd);
-      const recTd = document.createElement('td');
-      recTd.textContent = ds.recorder || '';
-      tr.appendChild(recTd);
-      const dc = daySaleRows(ds);
-      const salesTd = document.createElement('td');
-      salesTd.textContent = dc.rows.length
-        ? dc.rows.map((r) => {
-            const parts = [];
-            for (let i = 0; i < 3; i++) if (r.qtyBySize[i] > 0) parts.push(`${['S', 'M', 'L'][i]}${r.qtyBySize[i]}`);
-            return parts.length ? `${r.drink} ${parts.join(' ')}` : r.drink;
-          }).join(' · ')
-        : '—';
-      tr.appendChild(salesTd);
-      const spillTd = document.createElement('td');
-      spillTd.className = 'peso';
-      const spillCost = Number(tt.wastage);
-      spillTd.textContent = Number.isFinite(spillCost) ? peso(spillCost) : '—';
-      tr.appendChild(spillTd);
-      [peso(tt.revenue), peso(tt.cogs), peso(tt.net)].forEach((val) => {
-        const td = document.createElement('td');
-        td.className = 'peso';
-        td.textContent = val;
-        tr.appendChild(td);
-      });
-      // Edit button per row: opens this saved day into the grids below (prefill only).
-      const editTd = document.createElement('td');
-      const editBtn = document.createElement('button');
-      editBtn.className = 'btn-edit';
-      editBtn.textContent = 'Edit';
-      editBtn.setAttribute('aria-label', 'Edit day ' + (ds.date || String(ds.id)));
-      editBtn.addEventListener('click', () => {
-        editingDayId = String(ds.id);
-        editingDay = ds;
-        dateInp.value = ds.date || '';
-        recInp.value = ds.recorder || '';
-        salesGrid.clearRows();
-        const dayRows = daySaleRows(ds);
-        for (const r of dayRows.rows) {
-          if (salesGrid.rows.length >= MAX_GRID_ROWS) break;
-          const row = salesGrid.addRow();
-          row.sel.value = r.drink;
-          for (let i = 0; i < 3; i++) {
-            if (r.qtyBySize[i] > 0) row.cells[i].value = String(r.qtyBySize[i]);
-          }
-        }
-        spillGrid.clearRows();
-        const savedSpills = daySpillRows(ds);
-        if (savedSpills != null) {
-          for (const r of savedSpills) {
-            if (spillGrid.rows.length >= MAX_GRID_ROWS) break;
-            const row = spillGrid.addRow();
+    // R52: period summary — spill cost / revenue / COGS / net income for the days in view.
+    const summary = document.createElement('div');
+    summary.className = 'card';
+    // R52: tbody + summary are repainted whenever a picker changes, so the table always
+    // matches the period in view. The old code capped the table at 8 rows (sales.slice(0,
+    // 8)), which hid every older date; now every day is rendered and the CSS window shows
+    // five at a time with a scrollbar (see .scroll-y-5 in styles.css). Repainting throws
+    // away the old row buttons, so the two-click arm state is reset here — a stale
+    // pendingDelRowId must never arm a freshly painted row.
+    const paintDays = () => {
+      pendingDelRowId = null;
+      armedDelBtn = null;
+      while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+      while (summary.firstChild) summary.removeChild(summary.firstChild);
+      const days = visibleDays();
+      for (const ds of days) {
+        const tt = ds.totals || {};
+        const tr = document.createElement('tr');
+        const dateTd = document.createElement('td');
+        dateTd.textContent = ds.date || '';
+        tr.appendChild(dateTd);
+        const recTd = document.createElement('td');
+        recTd.textContent = ds.recorder || '';
+        tr.appendChild(recTd);
+        const dc = daySaleRows(ds);
+        const salesTd = document.createElement('td');
+        salesTd.textContent = dc.rows.length
+          ? dc.rows.map((r) => {
+              const parts = [];
+              for (let i = 0; i < 3; i++) if (r.qtyBySize[i] > 0) parts.push(`${['S', 'M', 'L'][i]}${r.qtyBySize[i]}`);
+              return parts.length ? `${r.drink} ${parts.join(' ')}` : r.drink;
+            }).join(' · ')
+          : '—';
+        tr.appendChild(salesTd);
+        const spillTd = document.createElement('td');
+        spillTd.className = 'peso';
+        const spillCost = Number(tt.wastage);
+        spillTd.textContent = Number.isFinite(spillCost) ? peso(spillCost) : '—';
+        tr.appendChild(spillTd);
+        // R52 QA: revenue/COGS/net guarded like the Spill cost cell above. Legacy days
+        // saved before the totals object existed can miss a field, and now that EVERY
+        // filtered day is painted (the old code stopped at 8 rows) those rows are on
+        // screen — peso(undefined) used to print ₱NaN. Missing reads as '—'; the summary
+        // card below counts the same day as 0, so the two agree ("nothing recorded").
+        [tt.revenue, tt.cogs, tt.net].forEach((raw) => {
+          const n = Number(raw);
+          const td = document.createElement('td');
+          td.className = 'peso';
+          td.textContent = Number.isFinite(n) ? peso(n) : '—';
+          tr.appendChild(td);
+        });
+        // Edit button per row: opens this saved day into the grids below (prefill only).
+        const editTd = document.createElement('td');
+        const editBtn = document.createElement('button');
+        editBtn.className = 'btn-edit';
+        editBtn.textContent = 'Edit';
+        editBtn.setAttribute('aria-label', 'Edit day ' + (ds.date || String(ds.id)));
+        editBtn.addEventListener('click', () => {
+          editingDayId = String(ds.id);
+          editingDay = ds;
+          dateInp.value = ds.date || '';
+          recInp.value = ds.recorder || '';
+          salesGrid.clearRows();
+          const dayRows = daySaleRows(ds);
+          for (const r of dayRows.rows) {
+            if (salesGrid.rows.length >= MAX_GRID_ROWS) break;
+            const row = salesGrid.addRow();
             row.sel.value = r.drink;
             for (let i = 0; i < 3; i++) {
               if (r.qtyBySize[i] > 0) row.cells[i].value = String(r.qtyBySize[i]);
             }
           }
-        }
-        if (dayRows.unmapped > 0) {
-          editWarn.textContent = `${dayRows.unmapped} line(s) on this day reference a deleted recipe — they stay saved but cannot be edited.`;
-          sec.appendChild(editWarn);
-        } else {
-          editWarn.textContent = '';
-        }
-        editHint.textContent =
-          savedSpills != null
-            ? 'Both grids now hold this saved day — sales in one row per drink, spills in the Spill grid. Change cups, then press Record day to save the changes.'
-            : ((ds.wastage || []).length
-              ? 'Grids hold this saved day. Its spills were saved before cup-level tracking existed, so they stay as recorded — type cups into the Spill grid to replace them.'
-              : 'Both grids now hold this saved day. Change cups, then press Record day to save the changes.');
-        sec.appendChild(editHint);
+          spillGrid.clearRows();
+          const savedSpills = daySpillRows(ds);
+          if (savedSpills != null) {
+            for (const r of savedSpills) {
+              if (spillGrid.rows.length >= MAX_GRID_ROWS) break;
+              const row = spillGrid.addRow();
+              row.sel.value = r.drink;
+              for (let i = 0; i < 3; i++) {
+                if (r.qtyBySize[i] > 0) row.cells[i].value = String(r.qtyBySize[i]);
+              }
+            }
+          }
+          if (dayRows.unmapped > 0) {
+            editWarn.textContent = `${dayRows.unmapped} line(s) on this day reference a deleted recipe — they stay saved but cannot be edited.`;
+            sec.appendChild(editWarn);
+          } else {
+            editWarn.textContent = '';
+          }
+          editHint.textContent =
+            savedSpills != null
+              ? 'Both grids now hold this saved day — sales in one row per drink, spills in the Spill grid. Change cups, then press Record day to save the changes.'
+              : ((ds.wastage || []).length
+                ? 'Grids hold this saved day. Its spills were saved before cup-level tracking existed, so they stay as recorded — type cups into the Spill grid to replace them.'
+                : 'Both grids now hold this saved day. Change cups, then press Record day to save the changes.');
+          sec.appendChild(editHint);
+        });
+        editTd.appendChild(editBtn);
+        tr.appendChild(editTd);
+        // Per-row Delete. First click arms a confirm prompt; a second click on the
+        // SAME day's button deletes ONLY that day (id=eq.<rowId>) — other days untouched.
+        const delTd = document.createElement('td');
+        const delBtn = document.createElement('button');
+        delBtn.className = 'btn-row-del';
+        delBtn.textContent = 'Delete';
+        delBtn.setAttribute('aria-label', 'Delete day ' + (ds.date || String(ds.id)));
+        delBtn.addEventListener('click', () => {
+          const rid = String(ds.id);
+          if (pendingDelRowId === rid) {
+            deleteData('daily_sales', `id=eq.${encodeURIComponent(rid)}`).then(() => location.reload());
+            return;
+          }
+          if (armedDelBtn && armedDelBtn !== delBtn) {
+            armedDelBtn.textContent = 'Delete';
+            armedDelBtn.classList.remove('armed');
+          }
+          pendingDelRowId = rid;
+          armedDelBtn = delBtn;
+          delBtn.textContent = 'Confirm?';
+          delBtn.classList.add('armed');
+          delConfirm.textContent = `Delete this recorded day — ${ds.date || String(ds.id)} · ${ds.recorder || ''}? Click "Confirm?" on the same row again to delete.`;
+        });
+        delTd.appendChild(delBtn);
+        tr.appendChild(delTd);
+        tbody.appendChild(tr);
+      }
+      // R52: summary for the period in view. Legacy days saved before the totals object
+      // existed may miss a field, so every term is coerced and non-finite values count as
+      // 0 — the card always prints four clean peso lines rather than ₱NaN.
+      const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+      const yv = yearSel.value;
+      const mv = monthSel.value;
+      const periodLabel = mv ? `${MONTH_NAMES[Number(mv) - 1]} ${yv || 'all years'}` : (yv ? yv : 'all recorded days');
+      const sh = document.createElement('div');
+      sh.textContent = `Summary — ${periodLabel}`;
+      summary.appendChild(sh);
+      const sd = document.createElement('div');
+      sd.textContent = `${days.length} day${days.length === 1 ? '' : 's'} in view`;
+      summary.appendChild(sd);
+      let sumSpill = 0, sumRev = 0, sumCogs = 0, sumNet = 0;
+      for (const ds of days) {
+        const tt = ds.totals || {};
+        sumSpill += num(tt.wastage);
+        sumRev += num(tt.revenue);
+        sumCogs += num(tt.cogs);
+        sumNet += num(tt.net);
+      }
+      [['Spill cost', sumSpill], ['Revenue', sumRev], ['COGS', sumCogs], ['Net income', sumNet]].forEach((pair) => {
+        const line = document.createElement('div');
+        line.textContent = `${pair[0]}: ${peso(pair[1])}`;
+        if (pair[1] < 0) line.className = 'neg';
+        summary.appendChild(line);
       });
-      editTd.appendChild(editBtn);
-      tr.appendChild(editTd);
-      // Per-row Delete. First click arms a confirm prompt; a second click on the
-      // SAME day's button deletes ONLY that day (id=eq.<rowId>) — other days untouched.
-      const delTd = document.createElement('td');
-      const delBtn = document.createElement('button');
-      delBtn.className = 'btn-row-del';
-      delBtn.textContent = 'Delete';
-      delBtn.setAttribute('aria-label', 'Delete day ' + (ds.date || String(ds.id)));
-      delBtn.addEventListener('click', () => {
-        const rid = String(ds.id);
-        if (pendingDelRowId === rid) {
-          deleteData('daily_sales', `id=eq.${encodeURIComponent(rid)}`).then(() => location.reload());
-          return;
-        }
-        if (armedDelBtn && armedDelBtn !== delBtn) {
-          armedDelBtn.textContent = 'Delete';
-          armedDelBtn.classList.remove('armed');
-        }
-        pendingDelRowId = rid;
-        armedDelBtn = delBtn;
-        delBtn.textContent = 'Confirm?';
-        delBtn.classList.add('armed');
-        delConfirm.textContent = `Delete this recorded day — ${ds.date || String(ds.id)} · ${ds.recorder || ''}? Click "Confirm?" on the same row again to delete.`;
-      });
-      delTd.appendChild(delBtn);
-      tr.appendChild(delTd);
-      tbody.appendChild(tr);
-    }
+    };
     table.append(thead, tbody);
     const scrollWrap = document.createElement('div');
-    scrollWrap.className = 'scroll-y';
+    // R52: five rows visible, then scroll for the rest — same windowed-table UX as
+    // Module 1's purchases table (.scroll-y), widened to five ~61px rows.
+    scrollWrap.className = 'scroll-y scroll-y-5';
     scrollWrap.appendChild(table);
     sec.appendChild(scrollWrap);
+    sec.appendChild(summary);
     sec.appendChild(delConfirm);
+    paintDays();
+    yearSel.addEventListener('change', paintDays);
+    monthSel.addEventListener('change', paintDays);
   } else {
     const note = document.createElement('div'); note.className = 'empty-note';
     note.textContent = 'No days recorded yet — fill the grids below and press Record day.';

@@ -13,6 +13,15 @@
   --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, "SF Mono", Consolas, monospace;
   --radius: 10px;
+
+  /* R51 polish tokens (cherry-picked from the Gemini theme pass) */
+  --bg-hover:    #322a22;  /* interactive hover surface */
+  --amber-glow:  rgba(224, 162, 74, 0.15);
+  --green-glow:  rgba(127, 176, 105, 0.15);
+  --red-glow:    rgba(201, 111, 92, 0.15);
+  --radius-sm:   7px;
+  --shadow:      0 6px 18px rgba(0, 0, 0, 0.30);
+  --transition:  all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 * { box-sizing: border-box; }
@@ -38,15 +47,22 @@ body { line-height: 1.5; }
 header {
   position: sticky; top: 0; z-index: 10;
   display: flex; align-items: center; gap: 4px;
-  padding: 10px 16px; background: var(--bg-raised);
+  padding: 10px 16px; background: rgba(38, 32, 25, 0.85);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--bg-line);
 }
 header .brand { font-weight: 700; letter-spacing: .05em; white-space: nowrap; }
 header .brand .mark { color: var(--amber); }
 nav { display: flex; flex-wrap: wrap; gap: 18px; padding: 0 0 0 0; }
-nav a { color: var(--ink-dim); text-decoration: none; font-size: .92rem; white-space: nowrap; }
-nav a:hover, nav a.active, nav a[data-active] { color: var(--amber); }
-nav a.active, nav a[data-active] { font-weight: 700; }
+nav a {
+  color: var(--ink-dim); text-decoration: none; font-size: .92rem; white-space: nowrap;
+  padding: 6px 10px; border-radius: var(--radius-sm); transition: var(--transition);
+}
+nav a:hover { color: var(--ink); background: var(--bg-hover); }
+nav a.active, nav a[data-active] {
+  color: var(--amber); font-weight: 700;
+  background: var(--amber-glow); border: 1px solid rgba(224, 162, 74, 0.25);
+}
 
 /* ---- layout ---- */
 main { padding: 22px 20px 40px; max-width: 1100px; }
@@ -57,17 +73,36 @@ main { padding: 22px 20px 40px; max-width: 1100px; }
 .card {
   background: var(--bg-raised); border: 1px solid var(--bg-line);
   border-radius: var(--radius); padding: 16px; margin: 0 0 16px;
+  box-shadow: var(--shadow);
 }
 table { border-collapse: collapse; width: 100%; font-size: .92rem; }
 th, td { padding: 8px 10px; border: 1px solid var(--bg-line); text-align: left; }
-thead th { background: var(--bg-line); color: var(--ink); font-weight: 600; }
+thead th {
+  background: var(--bg-line); color: var(--ink); font-weight: 600;
+  /* headers stay pinned while a .scroll-y / .table-wrap container scrolls */
+  position: sticky; top: 0; z-index: 2;
+}
 tbody tr:nth-child(even) { background: rgba(255,255,255,.02); }
+tbody tr:hover { background: var(--bg-hover); }
 .peso { color: var(--amber); font-family: var(--mono); white-space: nowrap; }
 .num { font-family: var(--mono); }
 .pos { color: var(--green); }
 .neg { color: var(--red); }
+/* status pills: reconcile variance/impact, margin, LOW badge.
+   inline-block inside a collapsed-border row keeps the column aligned. */
+td.pos, td.neg {
+  display: inline-block; margin: 4px; padding: 2px 8px;
+  border-radius: 20px; font-size: .8rem;
+}
+td.pos { background: var(--green-glow); border: 1px solid rgba(127, 176, 105, 0.35); }
+td.neg { background: var(--red-glow); border: 1px solid rgba(201, 111, 92, 0.35); }
 .empty-note { color: var(--ink-dim); font-style: italic; }
-.suggestion { color: var(--amber); font-style: italic; font-weight: 600; font-size: 1.15rem; margin: 8px 0 0; }
+.suggestion {
+  color: var(--amber); font-style: italic; font-weight: 600; font-size: 1.15rem;
+  margin: 8px 0 0; padding: 8px 12px;
+  background: var(--amber-glow); border-left: 3px solid var(--amber);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
 
 /* ---- dropdown (unit of measure) ---- */
 select.field {
@@ -77,6 +112,12 @@ select.field {
 }
 select.field option { background: var(--bg-raised); color: var(--ink); }
 
+/* focus feedback on every entry field */
+select.field:focus, input.field:focus {
+  outline: none; border-color: var(--amber);
+  box-shadow: 0 0 0 3px var(--amber-glow);
+}
+
 /* ---- live auto-computed total box ---- */
 .total-box {
   display: inline-block; margin: 8px 0 0;
@@ -85,7 +126,10 @@ select.field option { background: var(--bg-raised); color: var(--ink); }
 }
 
 /* ---- Phase 9: horizontal-scroll wrapper for wide tables (mobile) ---- */
-.table-wrap { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 0 16px; }
+.table-wrap {
+  display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 0 16px;
+  border: 1px solid var(--bg-line); border-radius: var(--radius);
+}
 .table-wrap > table { width: 100%; }
 
 /* ---- R17: table title (caption) + vertical-scroll container ---- */
@@ -96,8 +140,13 @@ caption.tbl-caption {
 .scroll-y {
   display: block; max-height: 260px; overflow-y: auto; overflow-x: auto;
   -webkit-overflow-scrolling: touch; margin: 0 0 16px;
+  border: 1px solid var(--bg-line); border-radius: var(--radius);
 }
 .scroll-y > table { width: 100%; }
+/* R52: recorded-days window — five rows visible (rows measure ~61px with the sticky
+   thead, plus the caption), scroll for the rest. Modifier of .scroll-y, used only by
+   the Daily Sales "Recorded days" table; every other table keeps the 260px window. */
+.scroll-y-5 { max-height: 340px; }
 
 /* ---- R18: visible field labels + per-row edit button ---- */
 /* R21b: entry form is a two-column layout — label left, input right */
@@ -124,9 +173,16 @@ caption.tbl-caption {
   border: 1px solid var(--bg-line); border-radius: var(--radius);
   padding: 4px 10px; font-size: .82rem;
 }
-.btn-row-del:hover { border-color: var(--red); color: var(--red); }
-.btn-row-del.armed { color: var(--red); border-color: var(--red); font-weight: 700; }
-.del-confirm { color: var(--red); font-weight: 600; margin: 0 0 10px; }
+.btn-row-del:hover { border-color: var(--red); color: var(--red); background: var(--red-glow); }
+.btn-row-del.armed {
+  color: var(--red); border-color: var(--red); font-weight: 700;
+  box-shadow: 0 0 10px var(--red-glow);
+}
+.del-confirm {
+  color: var(--red); font-weight: 600; margin: 0 0 10px;
+  padding: 8px 12px; background: var(--red-glow);
+  border-radius: var(--radius-sm); border: 1px solid rgba(201, 111, 92, 0.35);
+}
 
 /* ---- Phase 9: print / export buttons ---- */
 .btn-print {
@@ -193,6 +249,12 @@ caption.tbl-caption {
 .total-row { color: var(--ink); font-size: .85rem; font-weight: 600; }
 .total-row td { border-top: 1px solid var(--bg-line); }
 
+/* ---- custom scrollbar (matches the framed scroll containers) ---- */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--bg-line); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--amber-dim); }
+
 /* ---- responsive: collapse nav to hamburger on mobile ---- */
 @media (max-width: 720px) {
   header { flex-wrap: wrap; }
@@ -210,14 +272,18 @@ caption.tbl-caption {
   .gate { display: none; }
   header { position: static; }
   .btn-print, .btn-add, .btn-restock, .btn-record, .btn-save, .btn-price,
-  .btn-set, .btn-submit, input.field, input.lock, select.field { display: none; }
+  .btn-set, .btn-submit, input.field, input.lock, select.field,
+  .btn-edit, .btn-row-del { display: none; }
   /* R48 print: keep the count column as an empty outlined box on paper */
   .stocktake-cell { background: #fff; }
   .stocktake-cell input.field {
     display: inline-block; width: 64px; height: 14px;
     border: 1px solid #bbb; background: #fff;
   }
-  .table-wrap { overflow-x: visible; }
+  /* scroll containers must not clip rows on paper */
+  .table-wrap, .scroll-y { overflow: visible; max-height: none; border: none; }
+  /* status pills print as plain outlined text, not glow tints */
+  td.pos, td.neg { background: #fff; border: 1px solid #bbb; border-radius: 0; padding: 0; margin: 0; }
   .peso { color: #7a5a1f; }
   .pos { color: #2f6b2f; }
   .neg { color: #a23a2a; }
