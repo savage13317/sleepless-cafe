@@ -315,7 +315,18 @@ async function buildSite() {
     a.href = `#${p.id}`; a.textContent = p.title;
     nav.appendChild(a);
   });
-  header.append(brand, nav);
+  // R53: the SOP manual is now the landing page (`index.html`); this is the way back.
+  // Deliberately a button appended to `header`, NOT an `a` inside `nav` — the nav
+  // click interceptor further down preventDefaults every link in `nav` and would
+  // swallow a cross-page link. `index.html` resolves relative to `staff.html`,
+  // which is correct both on the local server and under the Pages sub-path.
+  const home = document.createElement('button');
+  home.className = 'home-btn';
+  home.textContent = '← Landing page';
+  home.addEventListener('click', () => {
+    window.location.href = 'index.html';
+  });
+  header.append(brand, nav, home);
 
   const main = document.createElement('main');
   stage.innerHTML = '';
